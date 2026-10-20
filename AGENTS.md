@@ -120,9 +120,142 @@ than trusting these numbers when you touch the kernels.
 Every driver the crate exposes is implemented natively — `dgesv`, `dgetrf`,
 `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (with balancing and left
 vectors -- there is no eigenvalues-only entry: the transcription computes the
-vectors, so a caller that only wants the spectrum pays for them; russell's
-`mat_eigenvalues` measures no penalty for that), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetri`,
-`zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev` — with no `not_implemented` guards left.
+vectors, so a caller that only wants the spectrum pays for them, at no measurable
+penalty), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetri`, `zpotrf`, `zheev`,
+`zgeev`, `zgesvd`, `zggev` — with no `not_implemented` guards left.
+
+## Performance: the blocking boundary
+
+Worth knowing before optimizing, because the obvious move is the wrong one.
+
+`dgemm` is a Goto-style blocked kernel with a 4x4 AVX2+FMA micro-kernel
+(MC=128, KC=256, NC=256). There is no `portable` module and no `#[cfg]` alternate:
+`wasm32` takes the same kernel and gets its scalar fallback, and the suite runs
+there under `wasmtime`.
+
+**The LAPACK layer is BLAS-3-free end to end**, so the blocked `dgemm` does not
+accelerate any decomposition:
+
+| Routine | Kernel used | BLAS-3? |
+|---|---|---|
+| `dsyev` | `dsytd2`, reflectors via a hand-written `dgemv` loop | no |
+| `dgesvd` / `zgesvd` | `dgebd2` / `zgebd2` | no |
+| `dgeev`, `dhseqr` | `dlahqr` (`dlarfg`/`dlanv2`/`dlartg` only) | no |
+| `dggev` / `zggev` | `dhgeqz` | no |
+
+Measured single-core, release, through the blocked `dgemm`: a matrix product went
+2.2 -> 21 Gelem/s, while `dsyev` runs at 0.4 ns/flop (~2.8 GFLOP/s) and `dgesvd` at
+0.2 ns/flop, against the kernel's 0.05 ns/flop.
+
+`dsytrd` was ported anyway and delivered far less than that headroom suggested:
+~8-10% on `dsyev` at n >= 400, because the reduction is only ~29% of `dsyev` and
+the blocked algorithm still performs the same n^3/3 symmetric product -- only the
+rank-2 update becomes BLAS-3. Real headroom for `dsyev` needs the two-stage
+`sy2sb` + `sb2st` reduction, which is a different algorithm, not a blocking of
+this one. `dgesvd` remains unblocked. The rules of thumb:
+
+* Port the blocked variant only when the target routine's flop count is dominated
+  by panel updates that can become `dgemm`. `dlahqr` can never benefit -- it has
+  no BLAS-3 to give.
+* **A blocked routine can be slower than the unblocked one for small input.**
+  `dsytrd` measured slower below n ~ 300 and faster above, so `dsyev` picks by
+  size (threshold 128) rather than always paying for the blocking. Always
+  blocking would have regressed every small case.
+* **Some quantities are not invariants.** The first `dsytrd` test compared the
+  reduced `d`/`e`/`tau` entries element-wise against the unblocked reduction, to
+  1e-12. That is unsatisfiable and the test was at fault: the two reductions use
+  different Householder sign conventions, so their off-diagonals are not
+  comparable. Against reference LAPACK's own `dsytrd` and `dsytd2` on the same
+  problem, `|e|` differs by 4e-1 at n=128 while the eigenvalues agree to 6e-14,
+  and the reference's blocked-vs-unblocked `|d|` alone reaches 3.2e-12. Check the
+  spectrum, which is invariant, not the intermediate factors.
+* `dlaqr0` has one benefit that is *not* about throughput: aggressive early
+  deflation detects converged eigenvalues many sweeps earlier, cutting the
+  iteration count independently of kernel speed. It is the only part with no
+  `dlahqr` analog.
+
+## Loose ends
+
+- `dhseqr`/`zhseqr` implement the unblocked (`dlahqr`/`zlahqr`) path only, which
+  is what the reference uses for n <= 15; the blocked `dlaqr0`/`zlaqr0` fallback
+  for large matrices is not ported. Non-convergence `INFO` is *reported*, not
+  asserted: `dsyev`/`zheev` (via `dsteqr`/`zsteqr`), `dhseqr` (via `dlahqr`) and
+  `dgesvd`/`zgesvd` (via `dbdsqr`/`zbdsqr`) return `LapackError::Convergence`.
+  `dhseqr`, `dgeev` and `dgesvd` are exercised through NaN-matrix tests;
+  `dsyev`/`zheev` are not, because a NaN matrix reads as zero under the norm gate
+  and takes the reference's `ANORM == 0` early return.
+- `dgesvd`/`zgesvd` use the direct bidiagonalization path for both shapes, not
+  the QR/LQ pre-reduction the reference uses for very tall or wide inputs.
+  Agreement with the reference is ~1e-15.
+- `--features dev_lapack` is a local command, never a CI job: it needs a LAPACK
+  build on the machine and must not be combined with a linked BLAS.
+
+## Coverage: deliberately uncovered lines
+
+Measured 2026-10-21 with `cargo llvm-cov --lib --lcov`, default features: **15,739 /
+16,840 lines = 93.46%**, 1,101 missed. The `dev_lapack` harness is not compiled in
+that run, and the test-only modules (`checkers`, `families`, `examples`) are counted
+because llvm-cov instruments the test build. Re-measure; these numbers move with the
+test suite, not only with the code.
+
+| where | missed | why |
+|---|---|---|
+| `src/lapack/qz.rs` | 483 | `dhgeqz`'s and `dggbal_p`'s rescue and permutation arms, `dtgevc`'s guard paths. Sweeping `dgeev` and `dggev` over the reference's own spectra — including a singular `B` — moved this file by zero lines, because those families are built to be *solvable* and cannot reach code whose job is to refuse or rescue. `dget54`, the checker for those factors, needs `Q` and `Z` out of `dggev`; the API does not grow for it, so that check is not written here |
+| `src/lapack/zeig.rs` | 209 | `zsteqr`'s remaining deflation arms, `zlarfg`'s underflow rescue, `zlatrs_upper`'s rescaling |
+| `src/lapack/eig.rs` | 116 | `dlaln2` and `dlanv2`: 2x2 blocks whose entries force a rescale |
+| `src/lapack/sym.rs`, `svd.rs`, `zsvd.rs` | 95, 49, 47 | `dsteqr`'s remaining arms, `dbdsqr`/`zbdsqr` convergence for repeated and zero singular values |
+| `src/lapack/families.rs` | 35 | harness argument checks the tests do not exercise, the `wn == 0` arm of a reflector built from a zero random vector in `dlagge`/`dlagsy` (probability zero), `dlatms`'s `INFO = 2` guard for an all-zero spectrum (unreachable: `latm1` always scales the maximum to one), and the assertion-failure lines of the fixture tests |
+| `src/lapack/checkers.rs` | 16 | the `TESTING/LIN` checkers' structural-violation penalty and a row-swap arm no failing fixture reaches, plus assertion-failure lines |
+| `src/lapack/examples.rs` | 16 | short-circuited false arms of the two example checkers. `DGET33`'s structural-violation penalty and `DGET31`'s `scale > 1` and `INFO ∉ {0, 1}` penalties are unreachable for a correct routine (`DGET31`'s own run reports `NINFO(1) = 0`); the tails of the `&&` chains in the `RES = ZERO` tests never evaluate; and the 2x2 complex arm of the `INFO` transcription is never selected by this grid, whose largest pivoted entry is always a diagonal one |
+| `src/lapack/auxiliary.rs` | 14 | the shared helpers' rescue arms: `dladiv`'s rescale-branch lines are constant-folded out when the fixture's literals reach the inliner (its twelve cases match the reference bit for bit, but the compiler removes the branches it can decide), `lascl_g`'s guards for a zero `cfrom` and for overflow, and the degenerate blocks of `dlae2`/`dlaev2` that the symmetric sweeps never produce |
+| `src/lapack/mod.rs` | 9 | the shape guards no test constructs (a zero dimension, a zero right-hand side), and `not_implemented`, which is retained so a reverted routine fails with a message naming the feature instead of a link error — no routine returns it |
+| `src/blas.rs` | 7 | one skipped-column arm (`zgemv` with a zero scalar) and the argument lines of two assertion messages |
+
+So the remainder is rescue and refusal code, by design: a correct routine cannot
+reach the arms whose job is to reject bad input or survive an iteration that gave
+up. Three rules follow.
+
+- **Do not refactor production code to satisfy the tool.** A line that reads as
+  uncovered may be an inlined region boundary; judge a refactor by the hit counts
+  of the lines that work, not by the total.
+- **The percentage moves when function layout changes, and that is the tool, not the
+  tests.** llvm-cov's `DA:` records include lines that carry no code — comments, a
+  `const` declared inside a function, a literal argument on its own line — whenever
+  inlining puts a region boundary there. Consolidating two copies of `dlaln2` into
+  `auxiliary.rs` moved the ratio while every executed line kept its hit count (the
+  `dgebal` entry went from 139 to 139): of `eig.rs`'s 586 missed lines, 416 had no
+  code in them. Say so in the PR instead of hunting the total.
+- **When a gap is called unreachable, say what was tried.** The LAPACK rows above are
+  trustworthy because five generators were ported and verified against LAPACK's own
+  build (`families.rs`) before the sweeps were run.
+
+## Invariants the kernels depend on
+
+These are the rules the code depends on. Each one has been violated at least once.
+
+- **Column-major, always.** Element `(i, j)` of an `n`-row matrix is `data[i + j * n]`;
+  `lapack.h` binds the Fortran routines and is column-major too. **`LAPACKE_*` is the
+  row-major API and would silently transpose every matrix** — it is never used, and
+  the reference harness binds the Fortran symbols for the same reason.
+- **A routine that writes one triangle leaves the other alone.** `dpotrf` with `'L'`
+  writes only the lower triangle and `'U'` only the upper; so do `dsyrk`, `zherk` and
+  their `_rank` twins. A caller's other half may legitimately hold zeros, so mirror
+  the triangle you *read* and write back only the requested one.
+- **Check the contraction length, not just the output shape.** `C := A Aᵀ` and
+  `C := Aᵀ A` are both `(n,n)` but contract over different lengths — `k` from `A`'s
+  columns in one case and from its rows in the other. This bit `dsyrk_rank`.
+- **`idamax` is 1-based in BLAS and 0-based here.** The first maximum wins.
+- **Scale before squaring.** A naive sum of squares overflows for entries around
+  `1e200` and underflows around `1e-200`. `dnrm2` and `dznrm2` use Blue's scaling.
+- **Non-convergence is an error, not a debug assertion.** An `INFO > 0` from
+  `dsteqr`, `zsteqr`, `dlahqr`, `dbdsqr`, `zbdsqr` or the QZ iterations becomes
+  `LapackError::Convergence`, never a `debug_assert`: a debug assertion only fires in
+  a debug build, so a release build handed back partly converged eigenvalues and
+  singular vectors as if they had converged.
+- **Conjugation is on the first contracted index in `zherk_rank`** (`sum_l conj(a[l][i])
+  * a[l][j]`), and on the second elsewhere (`zherk` uses `a[i][l] * conj(a[j][l])`).
+  The wrong choice changes only the imaginary parts of the off-diagonals, which is why
+  the test data has to be genuinely complex.
 
 ## Releasing
 
@@ -132,8 +265,8 @@ vectors, so a caller that only wants the spectrum pays for them; russell's
 2. Bump `version`, commit, tag `vX.Y.Z`, push the tag -- CI then repeats the dry run in its
    `Package` step, so a broken package cannot reach crates.io.
 3. `cargo publish`.
-4. Only after the crate is on crates.io, raise the consumer's requirement: `russell_lab` pins
-   `algebra_linear = "X"`, and a consumer must never point at a version that is not published.
+4. Only after the crate is on crates.io may a dependent crate raise its requirement to the new
+   version. Nothing, here or downstream, points at a version that is not published.
 
 ## Licence
 
