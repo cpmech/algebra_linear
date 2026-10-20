@@ -504,7 +504,7 @@ fn depth_first_search<T>(
 }
 
 /// Solves `L y = b` for unit lower triangular `L`, in place.
-fn unit_lower_solve<T: SparseScalar>(col_ptr: &[usize], row_idx: &[usize], val: &[T], x: &mut [T]) {
+pub(crate) fn unit_lower_solve<T: SparseScalar>(col_ptr: &[usize], row_idx: &[usize], val: &[T], x: &mut [T]) {
     let n = col_ptr.len() - 1;
     for j in 0..n {
         let xj = x[j];
@@ -516,7 +516,7 @@ fn unit_lower_solve<T: SparseScalar>(col_ptr: &[usize], row_idx: &[usize], val: 
 }
 
 /// Solves `U x = b` for upper triangular `U` with stored diagonal, in place.
-fn upper_solve<T: SparseScalar>(col_ptr: &[usize], row_idx: &[usize], val: &[T], x: &mut [T]) {
+pub(crate) fn upper_solve<T: SparseScalar>(col_ptr: &[usize], row_idx: &[usize], val: &[T], x: &mut [T]) {
     let n = col_ptr.len() - 1;
     for j in (0..n).rev() {
         let end = col_ptr[j + 1];

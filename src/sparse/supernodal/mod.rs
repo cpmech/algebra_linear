@@ -14,7 +14,12 @@
 use crate::sparse::csc::CscPattern;
 use crate::sparse::etree;
 use crate::sparse::ordering::colamd::{ColamdControl, colamd_order};
+
+pub mod lu;
+
+use crate::sparse::symbolic::fingerprint;
 use crate::sparse::{SparseError, perm};
+pub use lu::SupernodalLu;
 
 /// The symbolic structure of a supernodal LU factorization.
 ///
@@ -24,8 +29,12 @@ use crate::sparse::{SparseError, perm};
 #[derive(Clone, Debug)]
 pub struct SymbolicSupernodal {
     n: usize,
+    nnz: usize,
+    fingerprint: u64,
     col_counts: Vec<usize>,
     etree: Vec<isize>,
+    col_perm: Vec<usize>,
+    col_perm_inv: Vec<usize>,
     supernode_ptr: Vec<usize>,
     super_etree: Vec<isize>,
 }
@@ -73,8 +82,12 @@ impl SymbolicSupernodal {
         let (supernode_ptr, super_etree) = fundamental_supernodes(n, &etree, &col_counts);
         Ok(Self {
             n,
+            nnz: pattern.nnz(),
+            fingerprint: fingerprint(pattern),
             col_counts,
             etree,
+            col_perm: col_perm.to_vec(),
+            col_perm_inv: col_perm_inv.to_vec(),
             supernode_ptr,
             super_etree,
         })
@@ -84,6 +97,17 @@ impl SymbolicSupernodal {
     #[inline]
     pub fn n(&self) -> usize {
         self.n
+    }
+
+    /// Returns the number of stored entries the analysis saw.
+    #[inline]
+    pub fn nnz(&self) -> usize {
+        self.nnz
+    }
+
+    /// Returns `true` if `pattern` is the one this analysis was built for.
+    pub fn matches(&self, pattern: CscPattern<'_>) -> bool {
+        pattern.nrows() == self.n && pattern.ncols() == self.n && pattern.nnz() == self.nnz && fingerprint(pattern) == self.fingerprint
     }
 
     /// Returns the number of supernodes.
@@ -116,6 +140,19 @@ impl SymbolicSupernodal {
     #[inline]
     pub fn etree(&self) -> &[isize] {
         &self.etree
+    }
+
+    /// Returns the column permutation, mapping a new position to an original
+    /// column.
+    #[inline]
+    pub fn col_perm(&self) -> &[usize] {
+        &self.col_perm
+    }
+
+    /// Returns the inverse column permutation.
+    #[inline]
+    pub fn col_perm_inv(&self) -> &[usize] {
+        &self.col_perm_inv
     }
 
     /// Returns the number of columns in supernode `s`.

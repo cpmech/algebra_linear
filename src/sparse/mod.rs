@@ -55,7 +55,7 @@ pub use csc::{CscPattern, CscView};
 pub use lu::{LuFactors, SparseScalar};
 pub use ordering::colamd::{ColamdControl, ColamdOrdering, colamd_order};
 pub use stats::SparseLuStats;
-pub use supernodal::SymbolicSupernodal;
+pub use supernodal::{SupernodalLu, SymbolicSupernodal};
 pub use symbolic::SymbolicLu;
 
 /// Errors reported by the sparse routines.
