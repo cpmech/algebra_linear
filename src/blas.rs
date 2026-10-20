@@ -1255,6 +1255,190 @@ pub fn zherk_rank(alpha: f64, a: &[Complex64], beta: f64, c: &mut [Complex64], n
     }
 }
 
+/// `dtrsv`: solves `A x = b` for a triangular `A`, in place.
+///
+/// `a` is `n x n`, packed column-major. `lower` selects the triangle that is
+/// stored; `unit` declares a unit diagonal, whose stored entries are ignored.
+///
+/// This is BLAS `DTRSV` without the stride arguments. The transposed solve is
+/// [`dtrsv_transpose`], and the matrix right-hand side is [`dtrsm`].
+///
+/// # Panics
+///
+/// Panics if `a.len() != n * n` or `x.len() != n`.
+pub fn dtrsv(a: &[f64], x: &mut [f64], n: usize, lower: bool, unit: bool) {
+    assert_eq!(a.len(), n * n, "dtrsv: a must be n*n");
+    assert_eq!(x.len(), n, "dtrsv: x must be n");
+    tri_solve_f64(a, x, n, 1, lower, unit, false);
+}
+
+/// `dtrsv` with `A` transposed: solves `Aᵀ x = b` in place.
+///
+/// # Panics
+///
+/// Panics if `a.len() != n * n` or `x.len() != n`.
+pub fn dtrsv_transpose(a: &[f64], x: &mut [f64], n: usize, lower: bool, unit: bool) {
+    assert_eq!(a.len(), n * n, "dtrsv_transpose: a must be n*n");
+    assert_eq!(x.len(), n, "dtrsv_transpose: x must be n");
+    tri_solve_f64(a, x, n, 1, lower, unit, true);
+}
+
+/// `dtrsm`: solves a triangular system with a matrix right-hand side.
+///
+/// With `left`, `B := alpha A⁻¹ B` and `a` is `m x m`; otherwise
+/// `B := alpha B A⁻¹` and `a` is `n x n`. `b` is `m x n`, packed column-major.
+/// `lower` and `unit` have the same meaning as in [`dtrsv`].
+///
+/// This is BLAS `DTRSM` for the no-transpose, one-triangle case.
+///
+/// # Panics
+///
+/// Panics if `b.len() != m * n`, or if `a` does not have the order the chosen
+/// side requires.
+pub fn dtrsm(alpha: f64, a: &[f64], b: &mut [f64], m: usize, n: usize, left: bool, lower: bool, unit: bool) {
+    assert_eq!(b.len(), m * n, "dtrsm: b must be m*n");
+    if left {
+        assert_eq!(a.len(), m * m, "dtrsm: a must be m*m for the left side");
+        for j in 0..n {
+            let x = &mut b[j * m..(j + 1) * m];
+            for v in x.iter_mut() {
+                *v *= alpha;
+            }
+            tri_solve_f64(a, x, m, 1, lower, unit, false);
+        }
+    } else {
+        assert_eq!(a.len(), n * n, "dtrsm: a must be n*n for the right side");
+        for i in 0..m {
+            let x = &mut b[i..];
+            for k in 0..n {
+                x[k * m] *= alpha;
+            }
+            tri_solve_f64(a, x, n, m, lower, unit, true);
+        }
+    }
+}
+
+/// The triangular solve behind [`dtrsv`] and [`dtrsm`].
+///
+/// `x` is read and written with `stride`; `trans` swaps the triangle that the
+/// forward/backward sweep walks.
+fn tri_solve_f64(a: &[f64], x: &mut [f64], n: usize, stride: usize, lower: bool, unit: bool, trans: bool) {
+    let effective_lower = if trans { !lower } else { lower };
+    if effective_lower {
+        for i in 0..n {
+            let mut sum = x[i * stride];
+            for k in 0..i {
+                let a_ik = if trans { a[k + i * n] } else { a[i + k * n] };
+                sum -= a_ik * x[k * stride];
+            }
+            if !unit {
+                sum /= a[i + i * n];
+            }
+            x[i * stride] = sum;
+        }
+    } else {
+        for i in (0..n).rev() {
+            let mut sum = x[i * stride];
+            for k in i + 1..n {
+                let a_ik = if trans { a[k + i * n] } else { a[i + k * n] };
+                sum -= a_ik * x[k * stride];
+            }
+            if !unit {
+                sum /= a[i + i * n];
+            }
+            x[i * stride] = sum;
+        }
+    }
+}
+
+/// `ztrsv`: solves `A x = b` for a complex triangular `A`, in place.
+///
+/// Complex twin of [`dtrsv`].
+///
+/// # Panics
+///
+/// Panics if `a.len() != n * n` or `x.len() != n`.
+pub fn ztrsv(a: &[Complex64], x: &mut [Complex64], n: usize, lower: bool, unit: bool) {
+    assert_eq!(a.len(), n * n, "ztrsv: a must be n*n");
+    assert_eq!(x.len(), n, "ztrsv: x must be n");
+    tri_solve_z(a, x, n, 1, lower, unit, false);
+}
+
+/// `ztrsv` with `A` transposed: solves `Aᵀ x = b` in place.
+///
+/// Complex twin of [`dtrsv_transpose`]. Note that `Aᵀ` is not `Aᴴ`; this is the
+/// plain transpose, as in BLAS `'T'`.
+///
+/// # Panics
+///
+/// Panics if `a.len() != n * n` or `x.len() != n`.
+pub fn ztrsv_transpose(a: &[Complex64], x: &mut [Complex64], n: usize, lower: bool, unit: bool) {
+    assert_eq!(a.len(), n * n, "ztrsv_transpose: a must be n*n");
+    assert_eq!(x.len(), n, "ztrsv_transpose: x must be n");
+    tri_solve_z(a, x, n, 1, lower, unit, true);
+}
+
+/// `ztrsm`: complex triangular solve with a matrix right-hand side.
+///
+/// Complex twin of [`dtrsm`]; no conjugation is applied.
+///
+/// # Panics
+///
+/// Panics if `b.len() != m * n`, or if `a` does not have the order the chosen
+/// side requires.
+pub fn ztrsm(alpha: Complex64, a: &[Complex64], b: &mut [Complex64], m: usize, n: usize, left: bool, lower: bool, unit: bool) {
+    assert_eq!(b.len(), m * n, "ztrsm: b must be m*n");
+    if left {
+        assert_eq!(a.len(), m * m, "ztrsm: a must be m*m for the left side");
+        for j in 0..n {
+            let x = &mut b[j * m..(j + 1) * m];
+            for v in x.iter_mut() {
+                *v *= alpha;
+            }
+            tri_solve_z(a, x, m, 1, lower, unit, false);
+        }
+    } else {
+        assert_eq!(a.len(), n * n, "ztrsm: a must be n*n for the right side");
+        for i in 0..m {
+            let x = &mut b[i..];
+            for k in 0..n {
+                x[k * m] *= alpha;
+            }
+            tri_solve_z(a, x, n, m, lower, unit, true);
+        }
+    }
+}
+
+/// The complex triangular solve behind [`ztrsv`] and [`ztrsm`].
+fn tri_solve_z(a: &[Complex64], x: &mut [Complex64], n: usize, stride: usize, lower: bool, unit: bool, trans: bool) {
+    let effective_lower = if trans { !lower } else { lower };
+    if effective_lower {
+        for i in 0..n {
+            let mut sum = x[i * stride];
+            for k in 0..i {
+                let a_ik = if trans { a[k + i * n] } else { a[i + k * n] };
+                sum -= a_ik * x[k * stride];
+            }
+            if !unit {
+                sum /= a[i + i * n];
+            }
+            x[i * stride] = sum;
+        }
+    } else {
+        for i in (0..n).rev() {
+            let mut sum = x[i * stride];
+            for k in i + 1..n {
+                let a_ik = if trans { a[k + i * n] } else { a[i + k * n] };
+                sum -= a_ik * x[k * stride];
+            }
+            if !unit {
+                sum /= a[i + i * n];
+            }
+            x[i * stride] = sum;
+        }
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
@@ -2444,5 +2628,163 @@ mod definition_tests {
     #[should_panic(expected = "unrecognized norm")]
     fn zlange_rejects_an_unknown_norm() {
         zlange('X', &[cpx!(1.0, 0.0)], 1, 1);
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+mod triangular_tests {
+    use super::*;
+
+    fn assert_close(got: &[f64], want: &[f64], tol: f64) {
+        assert_eq!(got.len(), want.len());
+        for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+            assert!((g - w).abs() <= tol * (1.0 + w.abs()), "entry {i}: {g} vs {w}");
+        }
+    }
+
+    /// Dense `A x` for a packed column-major `A`.
+    fn matvec(a: &[f64], x: &[f64], n: usize) -> Vec<f64> {
+        (0..n).map(|i| (0..n).map(|k| a[i + k * n] * x[k]).sum()).collect()
+    }
+
+    /// Dense `alpha * A * B` for packed column-major operands.
+    fn matmul(alpha: f64, a: &[f64], b: &[f64], m: usize, n: usize, k: usize) -> Vec<f64> {
+        let mut c = vec![0.0; m * n];
+        for j in 0..n {
+            for i in 0..m {
+                for l in 0..k {
+                    c[i + j * m] += alpha * a[i + l * m] * b[l + j * k];
+                }
+            }
+        }
+        c
+    }
+
+    /// Lower triangular: `[[2, 0, 0], [1, 3, 0], [4, 5, 6]]`.
+    fn lower3() -> Vec<f64> {
+        vec![2.0, 1.0, 4.0, 0.0, 3.0, 5.0, 0.0, 0.0, 6.0]
+    }
+
+    /// Upper triangular: `[[2, 1, 4], [0, 3, 5], [0, 0, 6]]`.
+    fn upper3() -> Vec<f64> {
+        vec![2.0, 0.0, 0.0, 1.0, 3.0, 0.0, 4.0, 5.0, 6.0]
+    }
+
+    #[test]
+    fn dtrsv_solves_lower_and_upper() {
+        let x_exact = [1.0, -2.0, 0.5];
+        let mut b = matvec(&lower3(), &x_exact, 3);
+        dtrsv(&lower3(), &mut b, 3, true, false);
+        assert_close(&b, &x_exact, 1e-14);
+
+        let mut b = matvec(&upper3(), &x_exact, 3);
+        dtrsv(&upper3(), &mut b, 3, false, false);
+        assert_close(&b, &x_exact, 1e-14);
+    }
+
+    #[test]
+    fn dtrsv_ignores_a_unit_diagonal() {
+        // The same lower triangle with a diagonal of 7, declared unit.
+        let a = [7.0, 1.0, 4.0, 0.0, 7.0, 5.0, 0.0, 0.0, 7.0];
+        let x_exact = [1.0, -2.0, 0.5];
+        // Unit diagonal: b = A x uses 1 where the stored entry is 7.
+        let unit_a = [1.0, 1.0, 4.0, 0.0, 1.0, 5.0, 0.0, 0.0, 1.0];
+        let mut b = matvec(&unit_a, &x_exact, 3);
+        dtrsv(&a, &mut b, 3, true, true);
+        assert_close(&b, &x_exact, 1e-14);
+    }
+
+    #[test]
+    fn dtrsv_transpose_solves_the_transposed_system() {
+        let x_exact = [1.0, -2.0, 0.5];
+        // A is lower, so Aᵀ is upper.
+        let at = {
+            let a = lower3();
+            let mut at = vec![0.0; 9];
+            for j in 0..3 {
+                for i in 0..3 {
+                    at[i + j * 3] = a[j + i * 3];
+                }
+            }
+            at
+        };
+        let mut b = matvec(&at, &x_exact, 3);
+        dtrsv_transpose(&lower3(), &mut b, 3, true, false);
+        assert_close(&b, &x_exact, 1e-14);
+    }
+
+    #[test]
+    fn dtrsm_solves_both_sides() {
+        let alpha = 2.0;
+        let a = lower3();
+        // Left: B = A * X, so the routine returns alpha * A^-1 * B = alpha * X.
+        let x_exact = [1.0, 2.0, 3.0, -1.0, 0.5, 2.0];
+        let mut b = matmul(1.0, &a, &x_exact, 3, 2, 3);
+        dtrsm(alpha, &a, &mut b, 3, 2, true, true, false);
+        let want: Vec<f64> = x_exact.iter().map(|v| alpha * v).collect();
+        assert_close(&b, &want, 1e-14);
+
+        // Right: B = X * A, so the routine returns alpha * B * A^-1 = alpha * X.
+        let x_exact = [1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+        let mut b = matmul(1.0, &x_exact, &a, 2, 3, 3);
+        dtrsm(alpha, &a, &mut b, 2, 3, false, true, false);
+        let want: Vec<f64> = x_exact.iter().map(|v| alpha * v).collect();
+        assert_close(&b, &want, 1e-14);
+    }
+
+    #[test]
+    fn ztrsv_and_ztrsm_solve_complex_systems() {
+        let a = [
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, 0.5),
+        ];
+        let x_exact = [Complex64::new(1.0, -2.0), Complex64::new(0.5, 1.0)];
+        let mut b = [Complex64::new(0.0, 0.0); 2];
+        for i in 0..2 {
+            b[i] = (0..2).map(|k| a[i + k * 2] * x_exact[k]).sum();
+        }
+        ztrsv(&a, &mut b, 2, true, false);
+        for i in 0..2 {
+            assert!((b[i] - x_exact[i]).norm() < 1e-14);
+        }
+
+        // Matrix right-hand side, left solve.
+        let alpha = Complex64::new(1.5, -0.5);
+        let x_exact = [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(-1.0, 0.5),
+            Complex64::new(0.0, 2.0),
+        ];
+        let mut b = [Complex64::new(0.0, 0.0); 4];
+        for j in 0..2 {
+            for i in 0..2 {
+                b[i + j * 2] = (0..2).map(|k| a[i + k * 2] * x_exact[k + j * 2]).sum();
+            }
+        }
+        ztrsm(alpha, &a, &mut b, 2, 2, true, true, false);
+        for i in 0..4 {
+            assert!((b[i] - alpha * x_exact[i]).norm() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn empty_systems_are_noops() {
+        dtrsv(&[], &mut [], 0, true, false);
+        dtrsv(&[], &mut [], 0, false, false);
+        dtrsv_transpose(&[], &mut [], 0, true, false);
+        dtrsm(1.0, &[], &mut [], 0, 0, true, true, false);
+        ztrsv(&[], &mut [], 0, true, false);
+        ztrsm(Complex64::new(1.0, 0.0), &[], &mut [], 0, 0, true, true, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "dtrsv: x must be n")]
+    fn dtrsv_rejects_a_wrong_rhs_length() {
+        dtrsv(&[1.0], &mut [1.0, 2.0], 1, true, false);
     }
 }
