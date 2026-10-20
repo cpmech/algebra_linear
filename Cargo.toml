@@ -12,7 +12,7 @@ categories = ["mathematics", "science"]
 keywords = ["blas", "lapack", "linear-algebra", "matrix"]
 # Process files stay out of the published crate: code, README, LICENSE and the
 # reference harness are what a user needs.
-exclude = ["AGENTS.md", ".github/", ".gitignore", "rustfmt.toml"]
+exclude = ["AGENTS.md", ".github/", ".gitignore", "rustfmt.toml", "zscripts/"]
 
 # The reference-LAPACK parity harness. Development only: `build.rs` links a
 # locally built LAPACK 3.12.1 and the tests compare the kernels against it.
