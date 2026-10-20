@@ -49,3 +49,32 @@ jobs:
         run: cargo build --lib --target wasm32-unknown-unknown
       - name: Run the tests on wasm (generic kernel, no SIMD requirement)
         run: cargo test --lib --target wasm32-wasip1
+
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: |
+          curl -LsSf https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz | tar xzf - -C ~/.cargo/bin
+      - name: Generate code coverage
+        run: |
+          cargo llvm-cov --lib --lcov --output-path lcov.info
+      # The threshold is applied to the DA records of the lcov file, not with
+      # `--fail-under-lines`: llvm-cov's own summary counts a line once per
+      # monomorphization, which reports dimension-dispatching code as partly
+      # uncovered. See zscripts/check-coverage.bash.
+      #
+      # The bar sits below the 95 the rest of the dense-algebra stack holds itself
+      # to because what remains uncovered here is refusal and rescue code that a
+      # correct routine cannot reach -- the files and the reasons are recorded in
+      # AGENTS.md. The two points of headroom absorb inlining and region-boundary
+      # noise, which move the ratio without any test changing.
+      - name: Check line coverage
+        run: |
+          bash zscripts/check-coverage.bash lcov.info 92

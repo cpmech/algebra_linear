@@ -104,18 +104,20 @@ first. `src/parity.rs` compares the kernels against it.
   *reports* its largest error instead of asserting it. Verify a fixture against the
   reference binary before embedding it.
 
-## Measured state (2026-10-21)
+## Measured state
 
 ```bash
-cargo test --lib                                  # 139 passed, 0 failed
+cargo test --lib                                  # the kernels and their fixtures
 ALGEBRA_LINEAR_DEV_LAPACK_ROOT=/path/to/lapack/build \
-  cargo test --lib --features dev_lapack          # 152 passed, 0 failed
+  cargo test --lib --features dev_lapack          # the same, plus the parity tests
 cargo build --lib --target wasm32-unknown-unknown # builds
+cargo test --lib --target wasm32-wasip1           # the same tests on wasm
 ```
 
-The second run is the same 139 plus the 13 reference-parity tests. `fmt`, `clippy
---all-targets` (both configurations) and `cargo doc` are clean. Re-measure rather
-than trusting these numbers when you touch the kernels.
+The `dev_lapack` run is the ordinary suite plus the reference-parity tests; it adds
+tests, it does not replace any. `fmt`, `clippy --all-targets` (both configurations)
+and `cargo doc` are clean. The counts are not quoted here on purpose: read them off
+the run, which is the only thing that cannot go stale.
 
 Every driver the crate exposes is implemented natively — `dgesv`, `dgetrf`,
 `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (with balancing and left
@@ -192,24 +194,28 @@ this one. `dgesvd` remains unblocked. The rules of thumb:
 
 ## Coverage: deliberately uncovered lines
 
-Measured 2026-10-21 with `cargo llvm-cov --lib --lcov`, default features: **15,739 /
-16,840 lines = 93.46%**, 1,101 missed. The `dev_lapack` harness is not compiled in
-that run, and the test-only modules (`checkers`, `families`, `examples`) are counted
-because llvm-cov instruments the test build. Re-measure; these numbers move with the
-test suite, not only with the code.
+The gate is `cargo llvm-cov --lib --lcov` followed by `zscripts/check-coverage.bash`;
+CI runs both in its `coverage` job. It counts each source line once — the `DA:`
+records — because `--fail-under-lines` counts a line per monomorphization and would
+report dimension-dispatching code as partly uncovered.
 
-| where | missed | why |
-|---|---|---|
-| `src/lapack/qz.rs` | 483 | `dhgeqz`'s and `dggbal_p`'s rescue and permutation arms, `dtgevc`'s guard paths. Sweeping `dgeev` and `dggev` over the reference's own spectra — including a singular `B` — moved this file by zero lines, because those families are built to be *solvable* and cannot reach code whose job is to refuse or rescue. `dget54`, the checker for those factors, needs `Q` and `Z` out of `dggev`; the API does not grow for it, so that check is not written here |
-| `src/lapack/zeig.rs` | 209 | `zsteqr`'s remaining deflation arms, `zlarfg`'s underflow rescue, `zlatrs_upper`'s rescaling |
-| `src/lapack/eig.rs` | 116 | `dlaln2` and `dlanv2`: 2x2 blocks whose entries force a rescale |
-| `src/lapack/sym.rs`, `svd.rs`, `zsvd.rs` | 95, 49, 47 | `dsteqr`'s remaining arms, `dbdsqr`/`zbdsqr` convergence for repeated and zero singular values |
-| `src/lapack/families.rs` | 35 | harness argument checks the tests do not exercise, the `wn == 0` arm of a reflector built from a zero random vector in `dlagge`/`dlagsy` (probability zero), `dlatms`'s `INFO = 2` guard for an all-zero spectrum (unreachable: `latm1` always scales the maximum to one), and the assertion-failure lines of the fixture tests |
-| `src/lapack/checkers.rs` | 16 | the `TESTING/LIN` checkers' structural-violation penalty and a row-swap arm no failing fixture reaches, plus assertion-failure lines |
-| `src/lapack/examples.rs` | 16 | short-circuited false arms of the two example checkers. `DGET33`'s structural-violation penalty and `DGET31`'s `scale > 1` and `INFO ∉ {0, 1}` penalties are unreachable for a correct routine (`DGET31`'s own run reports `NINFO(1) = 0`); the tails of the `&&` chains in the `RES = ZERO` tests never evaluate; and the 2x2 complex arm of the `INFO` transcription is never selected by this grid, whose largest pivoted entry is always a diagonal one |
-| `src/lapack/auxiliary.rs` | 14 | the shared helpers' rescue arms: `dladiv`'s rescale-branch lines are constant-folded out when the fixture's literals reach the inliner (its twelve cases match the reference bit for bit, but the compiler removes the branches it can decide), `lascl_g`'s guards for a zero `cfrom` and for overflow, and the degenerate blocks of `dlae2`/`dlaev2` that the symmetric sweeps never produce |
-| `src/lapack/mod.rs` | 9 | the shape guards no test constructs (a zero dimension, a zero right-hand side), and `not_implemented`, which is retained so a reverted routine fails with a message naming the feature instead of a link error — no routine returns it |
-| `src/blas.rs` | 7 | one skipped-column arm (`zgemv` with a zero scalar) and the argument lines of two assertion messages |
+What follows records *why* a line cannot be covered, not how many there are: the
+number belongs to the gate, and this list is what a reader needs when the gate names
+a file. **A PR that adds code no test can reach adds it here in the same PR** —
+otherwise the next person spends a day rediscovering why a file sits below the bar.
+
+| where | why |
+|---|---|
+| `src/lapack/qz.rs` | `dhgeqz`'s and `dggbal_p`'s rescue and permutation arms, `dtgevc`'s guard paths. Sweeping `dgeev` and `dggev` over the reference's own spectra — including a singular `B` — moved this file by zero lines, because those families are built to be *solvable* and cannot reach code whose job is to refuse or rescue. `dget54`, the checker for those factors, needs `Q` and `Z` out of `dggev`; the API does not grow for it, so that check is not written here |
+| `src/lapack/zeig.rs` | `zsteqr`'s remaining deflation arms, `zlarfg`'s underflow rescue, `zlatrs_upper`'s rescaling |
+| `src/lapack/eig.rs` | `dlaln2` and `dlanv2`: 2x2 blocks whose entries force a rescale |
+| `src/lapack/sym.rs`, `svd.rs`, `zsvd.rs` | `dsteqr`'s remaining arms, `dbdsqr`/`zbdsqr` convergence for repeated and zero singular values |
+| `src/lapack/families.rs` | harness argument checks the tests do not exercise, the `wn == 0` arm of a reflector built from a zero random vector in `dlagge`/`dlagsy` (probability zero), `dlatms`'s `INFO = 2` guard for an all-zero spectrum (unreachable: `latm1` always scales the maximum to one), and the assertion-failure lines of the fixture tests |
+| `src/lapack/checkers.rs` | the `TESTING/LIN` checkers' structural-violation penalty and a row-swap arm no failing fixture reaches, plus assertion-failure lines |
+| `src/lapack/examples.rs` | short-circuited false arms of the two example checkers. `DGET33`'s structural-violation penalty and `DGET31`'s `scale > 1` and `INFO ∉ {0, 1}` penalties are unreachable for a correct routine (`DGET31`'s own run reports `NINFO(1) = 0`); the tails of the `&&` chains in the `RES = ZERO` tests never evaluate; and the 2x2 complex arm of the `INFO` transcription is never selected by this grid, whose largest pivoted entry is always a diagonal one |
+| `src/lapack/auxiliary.rs` | the shared helpers' rescue arms: `dladiv`'s rescale-branch lines are constant-folded out when the fixture's literals reach the inliner (its twelve cases match the reference bit for bit, but the compiler removes the branches it can decide), `lascl_g`'s guards for a zero `cfrom` and for overflow, and the degenerate blocks of `dlae2`/`dlaev2` that the symmetric sweeps never produce |
+| `src/lapack/mod.rs` | the shape guards no test constructs (a zero dimension, a zero right-hand side), and `not_implemented`, which is retained so a reverted routine fails with a message naming the feature instead of a link error — no routine returns it |
+| `src/blas.rs` | one skipped-column arm (`zgemv` with a zero scalar) and the argument lines of two assertion messages |
 
 So the remainder is rescue and refusal code, by design: a correct routine cannot
 reach the arms whose job is to reject bad input or survive an iteration that gave
