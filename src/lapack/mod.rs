@@ -163,6 +163,59 @@ pub fn dgetrf(a: &mut [f64], n: usize) -> Result<(Vec<usize>, f64), LapackError>
     Ok((ipiv, det))
 }
 
+/// `dgetrf_rect`: LU factorization of a rectangular panel with partial pivoting.
+///
+/// Factors the first `ncols` columns of an `nrows x ncols` column-major panel,
+/// `nrows >= ncols`, overwriting it with the packed multipliers of the unit-lower
+/// `L` (below the diagonal, including the rows below `ncols`) and the upper `U`.
+/// `ipiv[k]` records the row interchanged with row `k` at step `k`.
+///
+/// This is not a LAPACK routine: `getrf` is square. It is the panel primitive the
+/// sparse supernodal path needs, and it follows `dgetf2`'s unblocked algorithm
+/// restricted to the panel's columns.
+///
+/// # Errors
+///
+/// [`LapackError::BadShape`] if the lengths disagree or `nrows < ncols`, and
+/// [`LapackError::Singular`] if a pivot is zero.
+pub fn dgetrf_rect(a: &mut [f64], nrows: usize, ncols: usize, ipiv: &mut [usize]) -> Result<(), LapackError> {
+    if nrows < ncols || a.len() != nrows * ncols || ipiv.len() != ncols {
+        return Err(LapackError::BadShape);
+    }
+    if ncols == 0 {
+        return Ok(());
+    }
+    for k in 0..ncols {
+        let mut pivot = k;
+        let mut best = a[k + k * nrows].abs();
+        for i in k + 1..nrows {
+            let cand = a[i + k * nrows].abs();
+            if cand > best {
+                best = cand;
+                pivot = i;
+            }
+        }
+        if best <= ZERO_DETERMINANT {
+            return Err(LapackError::Singular);
+        }
+        if pivot != k {
+            for j in 0..ncols {
+                a.swap(j * nrows + k, j * nrows + pivot);
+            }
+        }
+        ipiv[k] = pivot;
+        let d = a[k + k * nrows];
+        for i in k + 1..nrows {
+            let factor = a[i + k * nrows] / d;
+            a[i + k * nrows] = factor;
+            for j in k + 1..ncols {
+                a[i + j * nrows] -= factor * a[k + j * nrows];
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `dgetri`: inverse of a matrix from its `dgetrf` factorization, in place.
 ///
 /// Solves `A X = I` column by column: apply the row interchanges, forward-solve
@@ -595,5 +648,73 @@ mod zero_determinant_tests {
         // still say so.
         let mut b = vec![1.0, 2.0, 2.0, 4.0];
         assert_eq!(dgetrf(&mut b, 2), Err(LapackError::Singular));
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+mod panel_tests {
+    use super::*;
+
+    fn reconstruct(nrows: usize, ncols: usize, original: &[f64], a: &[f64], ipiv: &[usize]) -> Vec<f64> {
+        let mut pa = original.to_vec();
+        for k in 0..ncols {
+            for j in 0..ncols {
+                pa.swap(j * nrows + k, j * nrows + ipiv[k]);
+            }
+        }
+        let mut lu = vec![0.0; nrows * ncols];
+        for j in 0..ncols {
+            for i in 0..nrows {
+                let mut sum = 0.0;
+                for l in 0..ncols {
+                    let l_il = if i == l {
+                        1.0
+                    } else if i > l {
+                        a[i + l * nrows]
+                    } else {
+                        0.0
+                    };
+                    let u_lj = if l <= j { a[l + j * nrows] } else { 0.0 };
+                    sum += l_il * u_lj;
+                }
+                lu[i + j * nrows] = sum;
+            }
+        }
+        for (idx, value) in pa.iter_mut().enumerate() {
+            assert!((*value - lu[idx]).abs() < 1e-12, "entry {idx}");
+        }
+        lu
+    }
+
+    #[test]
+    fn dgetrf_rect_reconstructs_a_tall_panel() {
+        let (nrows, ncols) = (5, 3);
+        let a0 = vec![1.0, 5.0, 2.0, 3.0, 4.0, 2.0, -1.0, 6.0, 0.0, 1.0, 3.0, 2.0, 1.0, 7.0, -2.0];
+        let mut a = a0.clone();
+        let mut ipiv = vec![0usize; ncols];
+        dgetrf_rect(&mut a, nrows, ncols, &mut ipiv).unwrap();
+        reconstruct(nrows, ncols, &a0, &a, &ipiv);
+        // The first pivot has to be the largest entry of column 0, row 1.
+        assert_eq!(ipiv[0], 1);
+    }
+
+    #[test]
+    fn dgetrf_rect_rejects_bad_shapes_and_singular_panels() {
+        let mut a = [1.0, 2.0, 3.0, 4.0];
+        let mut ipiv = [0usize; 2];
+        assert_eq!(dgetrf_rect(&mut a, 1, 2, &mut ipiv).unwrap_err(), LapackError::BadShape);
+        assert_eq!(dgetrf_rect(&mut a, 2, 2, &mut ipiv[..1]).unwrap_err(), LapackError::BadShape);
+
+        // First column zero: no pivot.
+        let mut singular = [0.0, 0.0, 2.0, 3.0];
+        assert_eq!(dgetrf_rect(&mut singular, 2, 2, &mut ipiv).unwrap_err(), LapackError::Singular);
+    }
+
+    #[test]
+    fn dgetrf_rect_accepts_zero_columns() {
+        let mut ipiv = [0usize; 0];
+        dgetrf_rect(&mut [], 3, 0, &mut ipiv).unwrap();
     }
 }
