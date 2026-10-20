@@ -2076,3 +2076,373 @@ mod reference_tests {
         }
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// The routines the hand-written cases above do not reach, each checked against
+/// its mathematical definition rather than against a captured fixture.
+///
+/// The definitions are written as plain indexed loops with the layout spelled out
+/// (`data[i + j * m]`), so they share no code with the kernels they judge. Every
+/// shape is non-square and every datum is distinct, which is what makes an index,
+/// a contracted length or a leading dimension taken from the wrong axis visible
+/// instead of absorbed.
+#[cfg(test)]
+mod definition_tests {
+    use super::*;
+    use crate::cpx;
+
+    /// Column-major `m x n` complex matrix whose entries are all distinct and
+    /// genuinely complex, so a conjugation error changes the result.
+    fn complex_matrix(m: usize, n: usize) -> Vec<Complex64> {
+        (0..m * n)
+            .map(|idx| {
+                let (i, j) = (idx % m, idx / m);
+                cpx!(i as f64 + 0.5 * j as f64, 1.0 - 2.0 * i as f64 + 0.25 * j as f64)
+            })
+            .collect()
+    }
+
+    /// Column-major `m x n` real matrix with distinct entries.
+    fn real_matrix(m: usize, n: usize) -> Vec<f64> {
+        (0..m * n).map(|idx| ((idx * 7 % 19) as f64) - 9.0 + idx as f64 * 0.125).collect()
+    }
+
+    fn assert_close(got: f64, want: f64, what: &str) {
+        let scale = want.abs().max(1.0);
+        assert!((got - want).abs() / scale < 1e-13, "{what}: got {got} but the definition says {want}");
+    }
+
+    fn assert_close_cpx(got: Complex64, want: Complex64, what: &str) {
+        let scale = want.norm().max(1.0);
+        assert!((got - want).norm() / scale < 1e-13, "{what}: got {got} but the definition says {want}");
+    }
+
+    /// `zaxpy`, `zscal`, `zcopy`: the complex level-1 updates, on values simple
+    /// enough to check by hand as well as by the loop.
+    #[test]
+    fn complex_level1_operations() {
+        let x = [cpx!(1.0, 1.0), cpx!(2.0, -1.0)];
+        let mut y = [cpx!(3.0, 0.0), cpx!(0.0, 1.0)];
+        zaxpy(cpx!(0.0, 1.0), &x, &mut y);
+        // i(1+i) = -1+i and i(2-i) = 1+2i, added to the old y.
+        assert_eq!(y, [cpx!(2.0, 1.0), cpx!(1.0, 3.0)]);
+
+        zscal(cpx!(2.0, 0.0), &mut y);
+        assert_eq!(y, [cpx!(4.0, 2.0), cpx!(2.0, 6.0)]);
+
+        let mut z = [cpx!(0.0, 0.0); 2];
+        zcopy(&y, &mut z);
+        assert_eq!(z, y);
+    }
+
+    /// `y := alpha * A^T * x + beta * y`, with `a` `2 x 3`: `x` has 2 entries and
+    /// `y` has 3, so a leading dimension taken from the wrong axis cannot agree.
+    #[test]
+    fn dgemv_trans_matches_the_definition() {
+        let (m, n) = (2usize, 3usize);
+        let a = real_matrix(m, n);
+        let x = real_matrix(m, 1);
+
+        for (alpha, beta) in [(1.0, 0.0), (-2.5, 1.75)] {
+            let y0 = real_matrix(1, n);
+            let mut want = y0.clone();
+            for j in 0..n {
+                let mut sum = 0.0;
+                for i in 0..m {
+                    sum += a[i + j * m] * x[i];
+                }
+                want[j] = alpha * sum + beta * want[j];
+            }
+            let mut got = y0.clone();
+            dgemv_trans(alpha, &a, &x, beta, &mut got, m, n);
+            for j in 0..n {
+                assert_close(got[j], want[j], &format!("dgemv_trans alpha={alpha} beta={beta} [{j}]"));
+            }
+        }
+    }
+
+    /// `A := alpha * x * y^T + A`, `A` `2 x 3`, including the zero-scalar column
+    /// that the kernel skips.
+    #[test]
+    fn dger_matches_the_definition() {
+        let (m, n) = (2usize, 3usize);
+        let x = real_matrix(m, 1);
+        let y = real_matrix(1, n);
+        for (label, y) in [("generic", y.clone()), ("one column zero", vec![y[0], 0.0, y[2]])] {
+            let a0 = real_matrix(m, n);
+            let mut want = a0.clone();
+            for j in 0..n {
+                for i in 0..m {
+                    want[i + j * m] += 1.5 * x[i] * y[j];
+                }
+            }
+            let mut got = a0.clone();
+            dger(1.5, &x, &y, &mut got, m, n);
+            for k in 0..m * n {
+                assert_close(got[k], want[k], &format!("dger {label} [{k}]"));
+            }
+        }
+    }
+
+    /// Both orientations of the complex matrix-vector product, `a` `2 x 3`.
+    #[test]
+    fn zgemv_and_zgemv_trans_match_the_definition() {
+        let (m, n) = (2usize, 3usize);
+        let a = complex_matrix(m, n);
+        let alpha = cpx!(0.5, -1.5);
+        let beta = cpx!(2.0, 0.25);
+
+        let x = complex_matrix(n, 1);
+        let y0 = complex_matrix(m, 1);
+        let mut want = y0.clone();
+        for i in 0..m {
+            let mut sum = Complex64::new(0.0, 0.0);
+            for j in 0..n {
+                sum += a[i + j * m] * x[j];
+            }
+            want[i] = alpha * sum + beta * want[i];
+        }
+        let mut got = y0.clone();
+        zgemv(alpha, &a, &x, beta, &mut got, m, n);
+        for i in 0..m {
+            assert_close_cpx(got[i], want[i], &format!("zgemv [{i}]"));
+        }
+
+        // Transposed: x has m entries, y has n.
+        let xt = complex_matrix(m, 1);
+        let yt0 = complex_matrix(n, 1);
+        let mut want = yt0.clone();
+        for j in 0..n {
+            let mut sum = Complex64::new(0.0, 0.0);
+            for i in 0..m {
+                sum += a[i + j * m] * xt[i];
+            }
+            want[j] = alpha * sum + beta * want[j];
+        }
+        let mut got = yt0.clone();
+        zgemv_trans(alpha, &a, &xt, beta, &mut got, m, n);
+        for j in 0..n {
+            assert_close_cpx(got[j], want[j], &format!("zgemv_trans [{j}]"));
+        }
+    }
+
+    /// `A := alpha * x * y^T + A` for complex data; not conjugated, so a shim that
+    /// routed this to `zgerc` would show in every imaginary part. The second case
+    /// zeroes one entry of `y`, which is the arm that skips a whole column.
+    #[test]
+    fn zger_matches_the_definition() {
+        let (m, n) = (2usize, 3usize);
+        let x = complex_matrix(m, 1);
+        let alpha = cpx!(1.0, -0.5);
+        let y = complex_matrix(1, n);
+        for (label, y) in [("generic", y.clone()), ("one column zero", vec![y[0], cpx!(0.0, 0.0), y[2]])] {
+            let a0 = complex_matrix(m, n);
+            let mut want = a0.clone();
+            for j in 0..n {
+                for i in 0..m {
+                    want[i + j * m] += alpha * x[i] * y[j];
+                }
+            }
+            let mut got = a0.clone();
+            zger(alpha, &x, &y, &mut got, m, n);
+            for k in 0..m * n {
+                assert_close_cpx(got[k], want[k], &format!("zger {label} [{k}]"));
+            }
+        }
+    }
+
+    /// `C := alpha * A * B + beta * C` for complex data (both 'N'), `A` `2 x 3` and
+    /// `B` `3 x 4`, so all three dimensions differ.
+    #[test]
+    fn zgemm_matches_the_definition() {
+        let (m, n, k) = (2usize, 3usize, 4usize);
+        let a = complex_matrix(m, k);
+        let b = complex_matrix(k, n);
+        let alpha = cpx!(0.5, -1.5);
+        let beta = cpx!(-2.0, 0.25);
+        let c0 = complex_matrix(m, n);
+        let mut want = c0.clone();
+        for j in 0..n {
+            for i in 0..m {
+                let mut sum = Complex64::new(0.0, 0.0);
+                for l in 0..k {
+                    sum += a[i + l * m] * b[l + j * k];
+                }
+                let idx = i + j * m;
+                want[idx] = alpha * sum + beta * want[idx];
+            }
+        }
+        let mut got = c0.clone();
+        zgemm(alpha, &a, &b, beta, &mut got, m, n, k);
+        for idx in 0..m * n {
+            assert_close_cpx(got[idx], want[idx], &format!("zgemm [{idx}]"));
+        }
+    }
+
+    /// `zsyrk` (`A A^T`, `a` is `n x k`) and `zsyrk_rank` (`A^T A`, `a` is `k x n`),
+    /// both triangles, with the untaken triangle left alone.
+    #[test]
+    fn zsyrk_routines_match_the_definition() {
+        let (n, k) = (3usize, 4usize);
+        let alpha = cpx!(2.5, -1.0);
+        let beta = cpx!(-1.5, 0.25);
+        let c0 = complex_matrix(n, n);
+
+        for transposed in [false, true] {
+            let a = complex_matrix(if transposed { k } else { n }, if transposed { n } else { k });
+            for upper in [false, true] {
+                let mut want = c0.clone();
+                for j in 0..n {
+                    for i in 0..n {
+                        let in_triangle = if upper { i <= j } else { i >= j };
+                        if !in_triangle {
+                            continue;
+                        }
+                        let mut sum = Complex64::new(0.0, 0.0);
+                        for l in 0..k {
+                            sum += if transposed {
+                                a[l + i * k] * a[l + j * k]
+                            } else {
+                                a[i + l * n] * a[j + l * n]
+                            };
+                        }
+                        let idx = i + j * n;
+                        want[idx] = alpha * sum + beta * want[idx];
+                    }
+                }
+
+                let mut got = c0.clone();
+                if transposed {
+                    zsyrk_rank(alpha, &a, beta, &mut got, n, k, upper);
+                } else {
+                    zsyrk(alpha, &a, beta, &mut got, n, k, upper);
+                }
+                for j in 0..n {
+                    for i in 0..n {
+                        let idx = i + j * n;
+                        assert_close_cpx(got[idx], want[idx], &format!("zsyrk transposed={transposed} upper={upper} ({i},{j})"));
+                        let in_triangle = if upper { i <= j } else { i >= j };
+                        if !in_triangle {
+                            assert_eq!(got[idx], c0[idx], "the untaken triangle must be left alone");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `dsyrk_rank` with `transposed = true`, which is the `A^T A` path; the
+    /// `false` arm forwards to `dsyrk` and is covered by its own test.
+    #[test]
+    fn dsyrk_rank_transposed_matches_the_definition() {
+        let (n, k) = (3usize, 4usize);
+        let a = real_matrix(k, n);
+        let (alpha, beta) = (2.5, -1.5);
+        let c0 = real_matrix(n, n);
+        for upper in [false, true] {
+            let mut want = c0.clone();
+            for j in 0..n {
+                for i in 0..n {
+                    let in_triangle = if upper { i <= j } else { i >= j };
+                    if !in_triangle {
+                        continue;
+                    }
+                    let mut sum = 0.0;
+                    for l in 0..k {
+                        sum += a[l + i * k] * a[l + j * k];
+                    }
+                    let idx = i + j * n;
+                    want[idx] = alpha * sum + beta * want[idx];
+                }
+            }
+            let mut got = c0.clone();
+            dsyrk_rank(alpha, &a, beta, &mut got, n, k, upper, true);
+            for idx in 0..n * n {
+                assert_close(got[idx], want[idx], &format!("dsyrk_rank upper={upper} [{idx}]"));
+            }
+            // The forwarding arm must agree with `dsyrk` itself.
+            let mut via_rank = c0.clone();
+            let mut via_syrk = c0.clone();
+            let a_nk = real_matrix(n, k);
+            dsyrk_rank(alpha, &a_nk, beta, &mut via_rank, n, k, upper, false);
+            dsyrk(alpha, &a_nk, beta, &mut via_syrk, n, k, upper);
+            assert_eq!(via_rank, via_syrk, "dsyrk_rank(transposed = false) must forward to dsyrk");
+        }
+    }
+
+    /// `zherk` (`A A^H`, `a` is `n x k`): the diagonal must come out exactly real
+    /// and the untaken triangle must be untouched.
+    #[test]
+    fn zherk_matches_the_definition() {
+        let (n, k) = (3usize, 4usize);
+        let a = complex_matrix(n, k);
+        let (alpha, beta) = (2.5, -1.5);
+        let c0 = complex_matrix(n, n);
+        for upper in [false, true] {
+            let mut want = c0.clone();
+            for j in 0..n {
+                for i in 0..n {
+                    let in_triangle = if upper { i <= j } else { i >= j };
+                    if !in_triangle {
+                        continue;
+                    }
+                    let mut sum = Complex64::new(0.0, 0.0);
+                    for l in 0..k {
+                        // a[i][l] * conj(a[j][l]): the second index is conjugated.
+                        sum += a[i + l * n] * a[j + l * n].conj();
+                    }
+                    let idx = i + j * n;
+                    let mut v = Complex64::new(alpha * sum.re, alpha * sum.im) + Complex64::new(beta * want[idx].re, beta * want[idx].im);
+                    if i == j {
+                        v.im = 0.0;
+                    }
+                    want[idx] = v;
+                }
+            }
+            let mut got = c0.clone();
+            zherk(alpha, &a, beta, &mut got, n, k, upper);
+            for j in 0..n {
+                for i in 0..n {
+                    let idx = i + j * n;
+                    let in_triangle = if upper { i <= j } else { i >= j };
+                    if in_triangle {
+                        assert_close_cpx(got[idx], want[idx], &format!("zherk upper={upper} ({i},{j})"));
+                        if i == j {
+                            assert_eq!(got[idx].im, 0.0, "the Hermitian diagonal must be exactly real");
+                        }
+                    } else {
+                        assert_eq!(got[idx], c0[idx], "the untaken triangle must be left alone");
+                    }
+                }
+            }
+        }
+    }
+
+    /// `zlange` for every norm code, against column sums, row sums, the Frobenius
+    /// norm and the maximum modulus; plus its rejection of anything else.
+    #[test]
+    fn zlange_matches_the_definition() {
+        let (m, n) = (2usize, 3usize);
+        let a = complex_matrix(m, n);
+        let one = (0..n).map(|j| (0..m).map(|i| a[i + j * m].norm()).sum::<f64>()).fold(0.0f64, f64::max);
+        let inf = (0..m).map(|i| (0..n).map(|j| a[i + j * m].norm()).sum::<f64>()).fold(0.0f64, f64::max);
+        let frob = a.iter().map(|v| v.norm_sqr()).sum::<f64>().sqrt();
+        let max = a.iter().map(|v| v.norm()).fold(0.0f64, f64::max);
+        for norm in ['1', 'O', 'o', 'I', 'i', 'F', 'f', 'E', 'e', 'M', 'm'] {
+            let want = match norm {
+                '1' | 'O' | 'o' => one,
+                'I' | 'i' => inf,
+                'F' | 'f' | 'E' | 'e' => frob,
+                _ => max,
+            };
+            assert_close(zlange(norm, &a, m, n), want, &format!("zlange '{norm}'"));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "unrecognized norm")]
+    fn zlange_rejects_an_unknown_norm() {
+        zlange('X', &[cpx!(1.0, 0.0)], 1, 1);
+    }
+}
