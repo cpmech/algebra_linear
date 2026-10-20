@@ -1,8 +1,9 @@
 //! Sparse direct solvers.
 //!
 //! The module provides a simplicial sparse LU factorization in compressed sparse
-//! column (CSC) form, together with the COLAMD column ordering it uses to reduce
-//! fill.
+//! column (CSC) form, a supernodal one, and the COLAMD column ordering they use
+//! to reduce fill. The supernodal path is explicit for now: `SymbolicSupernodal`
+//! and `SupernodalLu`, not a threshold inside `SymbolicLu`.
 //!
 //! # Provenance
 //!
@@ -43,16 +44,19 @@
 //! ```
 
 pub mod csc;
+mod etree;
 pub mod lu;
 pub mod ordering;
 pub mod perm;
 mod stats;
+pub mod supernodal;
 pub mod symbolic;
 
 pub use csc::{CscPattern, CscView};
 pub use lu::{LuFactors, SparseScalar};
 pub use ordering::colamd::{ColamdControl, ColamdOrdering, colamd_order};
 pub use stats::SparseLuStats;
+pub use supernodal::{SupernodalLu, SymbolicSupernodal};
 pub use symbolic::SymbolicLu;
 
 /// Errors reported by the sparse routines.

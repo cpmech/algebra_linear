@@ -8,7 +8,7 @@ target, including `wasm32-unknown-unknown`.
 | module | contents |
 |---|---|
 | `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, `dtrsv` (+transpose), `dtrsm`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `ztrsv` (+transpose), `ztrsm`, `dznrm2` |
-| `sparse` | a simplicial sparse LU in CSC form (`CscView`, `SymbolicLu`, `LuFactors`) with real and complex scalars, plus its ported COLAMD ordering |
+| `sparse` | a simplicial sparse LU (`CscView`, `SymbolicLu`, `LuFactors`) and a supernodal one (`SymbolicSupernodal`, `SupernodalLu`) in CSC form, with real and complex scalars, plus the ported COLAMD ordering |
 | `lapack` | drivers: `dgesv`, `dgetrf`, `dgetrf_rect` (the `nrows x ncols` panel), `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetrf_rect`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
 
 Not every BLAS or LAPACK routine is here: the port covers the drivers a dense

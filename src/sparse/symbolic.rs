@@ -107,7 +107,7 @@ impl SymbolicLu {
 }
 
 /// FNV-1a over the column pointers and row indices.
-fn fingerprint(pattern: CscPattern<'_>) -> u64 {
+pub(crate) fn fingerprint(pattern: CscPattern<'_>) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for &x in pattern.col_ptr().iter().chain(pattern.row_idx().iter()) {
         for byte in x.to_le_bytes() {
