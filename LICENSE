@@ -1,13 +1,14 @@
-algebra_linear — pure-Rust BLAS and LAPACK
+algebra_linear — pure-Rust BLAS, LAPACK and sparse LU
 
 Copyright (c) 2026 Dorival Pedroso (the Rust transcription)
 
-This crate is released under the BSD 3-Clause licence. Its kernels are a
+This crate is released under the BSD 3-Clause licence. Its dense kernels are a
 transcription of LAPACK 3.12.1 and its reference BLAS, whose copyright notice and
 licence conditions are the text below: it is reproduced verbatim, and it covers
-the derived code in this crate. If a future kernel is transcribed from another
-project (OpenBLAS, for example), that project's notice is added here as well,
-and the crate stays BSD-3-Clause.
+the derived code in this crate. The sparse LU and its COLAMD ordering are a
+translation of faer (MIT), whose notice — together with the SuiteSparse COLAMD
+(BSD 3-Clause) notice — follows the LAPACK one. The crate stays BSD-3-Clause;
+every derived notice is reproduced below.
 
 LAPACK: https://www.netlib.org/lapack/ — version 3.12.1.
 
@@ -63,3 +64,72 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+faer — sparse LU and COLAMD (MIT)
+================================================================================
+
+The sparse LU in `src/sparse/` is a translation of faer's sparse LU and of
+faer's COLAMD ordering, taken from faer commit ddbd2ae
+(https://codeberg.org/sarah-quinones/faer). faer's sparse LU is distributed under
+the MIT licence:
+
+MIT License
+
+Copyright (c) 2026 sarah quiñones el kazdadi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+SuiteSparse COLAMD — copyright notice and licence (BSD 3-Clause)
+================================================================================
+
+The COLAMD ordering in `src/sparse/ordering/colamd.rs` follows faer's
+transcription of SuiteSparse COLAMD.
+
+COLAMD, Copyright 1998-2022, Timothy A. Davis.  http://www.suitesparse.com
+http://www.suitesparse.com
+
+--------------------------------------------------------------------------------
+
+COLAMD License: BSD 3-clause
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+        * Redistributions of source code must retain the above copyright
+          notice, this list of conditions and the following disclaimer.
+        * Redistributions in binary form must reproduce the above copyright
+          notice, this list of conditions and the following disclaimer in the
+          documentation and/or other materials provided with the distribution.
+        * Neither the name of the organizations to which the authors are
+          affiliated, nor the names of its contributors may be used to endorse
+          or promote products derived from this software without specific prior
+          written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+    ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+    (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+    SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+    OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+    DAMAGE.
