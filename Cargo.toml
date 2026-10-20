@@ -2,6 +2,7 @@
 name = "algebra_linear"
 version = "1.0.0"
 edition = "2024"
+rust-version = "1.85"
 license = "BSD-3-Clause"
 description = "Pure-Rust BLAS and LAPACK"
 homepage = "https://github.com/cpmech/algebra_linear"
@@ -10,6 +11,9 @@ documentation = "https://docs.rs/algebra_linear"
 readme = "README.md"
 categories = ["mathematics", "science"]
 keywords = ["blas", "lapack", "linear-algebra", "matrix"]
+# Process files stay out of the published crate: code, README, LICENSE and the
+# reference harness are what a user needs.
+exclude = ["AGENTS.md", ".github/", ".gitignore", "rustfmt.toml"]
 
 # The reference-LAPACK parity harness. Development only: `build.rs` links a
 # locally built LAPACK 3.12.1 and the tests compare the kernels against it.
@@ -20,6 +24,11 @@ keywords = ["blas", "lapack", "linear-algebra", "matrix"]
 #       cargo test --features dev_lapack
 [features]
 dev_lapack = []
+
+[package.metadata.docs.rs]
+# The `dev_lapack` harness cannot build without a local LAPACK, and docs.rs has
+# none: never let a docs build enable it.
+all-features = false
 
 [dependencies]
 num-complex = "0.4"

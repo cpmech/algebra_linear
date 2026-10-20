@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Pure-Rust BLAS and LAPACK.
 //!
 //! # Layout and conventions

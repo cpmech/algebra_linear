@@ -30,6 +30,11 @@ jobs:
           fi
       - name: Test
         run: cargo test --lib
+      - name: Package
+        # Tag pushes only: this is the check a release needs -- that the published
+        # crate is complete, carries no process files, and builds on its own.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cargo publish --dry-run
 
   wasm:
     runs-on: ubuntu-latest

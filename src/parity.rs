@@ -171,6 +171,9 @@ fn dgesv_agrees_with_the_reference() {
         let mut ipiv = vec![0i32; n];
         let mut info = 0i32;
         let n_i32 = n as i32;
+        // SAFETY: the buffers are local vectors sized from this test's `n` (or `m` and
+        // `n`), so they hold every element the reference writes; `info` is checked
+        // immediately after each call.
         unsafe {
             dev_lapack::c_dgesv(
                 &n_i32,
@@ -208,6 +211,9 @@ fn dgetrf_and_dgetri_agree_with_the_reference() {
         let n_i32 = n as i32;
         let mut work = vec![0.0f64; n.max(1)];
         let lwork = n_i32;
+        // SAFETY: the buffers are local vectors sized from this test's `n` (or `m` and
+        // `n`), so they hold every element the reference writes; `info` is checked
+        // immediately after each call.
         unsafe {
             dev_lapack::c_dgetrf(&n_i32, &n_i32, lu_ref.as_mut_ptr(), &n_i32, ipiv.as_mut_ptr(), &mut info);
             assert_eq!(info, 0, "reference dgetrf failed for n={n}");
@@ -253,6 +259,9 @@ fn dpotrf_agrees_with_the_reference() {
         let mut l_ref = t.clone();
         let mut info = 0i32;
         let n_i32 = n as i32;
+        // SAFETY: the buffers are local vectors sized from this test's `n` (or `m` and
+        // `n`), so they hold every element the reference writes; `info` is checked
+        // immediately after each call.
         unsafe {
             dev_lapack::c_dpotrf(C_FALSE, &n_i32, l_ref.as_mut_ptr(), &n_i32, &mut info);
         }
@@ -292,6 +301,9 @@ fn singular_detection_agrees_with_the_reference() {
         let mut ipiv = vec![0i32; n];
         let mut info = 0i32;
         let n_i32 = n as i32;
+        // SAFETY: the buffers are local vectors sized from this test's `n` (or `m` and
+        // `n`), so they hold every element the reference writes; `info` is checked
+        // immediately after each call.
         unsafe {
             dev_lapack::c_dgetrf(&n_i32, &n_i32, a_ref.as_mut_ptr(), &n_i32, ipiv.as_mut_ptr(), &mut info);
         }
@@ -423,6 +435,9 @@ fn complex_cholesky_agrees_with_the_reference() {
             let mut info = 0i32;
             let n_i32 = n as i32;
             let c_upper = if upper { C_TRUE } else { C_FALSE };
+            // SAFETY: the buffers are local vectors sized from this test's `n` (or `m` and
+            // `n`), so they hold every element the reference writes; `info` is checked
+            // immediately after each call.
             unsafe {
                 dev_lapack::c_zpotrf(c_upper, &n_i32, l_ref.as_mut_ptr(), &n_i32, &mut info);
             }
@@ -463,11 +478,17 @@ fn complex_inverse_agrees_with_the_reference() {
         let mut lu = a.clone();
         let mut ipiv = vec![0i32; n];
         let mut info = 0i32;
+        // SAFETY: the buffers are local vectors sized from this test's `n` (or `m` and
+        // `n`), so they hold every element the reference writes; `info` is checked
+        // immediately after each call.
         unsafe {
             dev_lapack::c_zgetrf(&n_i32, &n_i32, lu.as_mut_ptr(), &n_i32, ipiv.as_mut_ptr(), &mut info);
         }
         assert_eq!(info, 0, "reference zgetrf failed for n={n}");
         let mut work = vec![Complex64::new(0.0, 0.0); n.max(1)];
+        // SAFETY: the buffers are local vectors sized from this test's `n` (or `m` and
+        // `n`), so they hold every element the reference writes; `info` is checked
+        // immediately after each call.
         unsafe {
             dev_lapack::c_zgetri(
                 &n_i32,
@@ -530,6 +551,9 @@ fn complex_solve_agrees_with_the_reference() {
         let mut b_ref = b.clone();
         let mut ipiv = vec![0i32; n];
         let mut info = 0i32;
+        // SAFETY: the buffers are local vectors sized from this test's `n` (or `m` and
+        // `n`), so they hold every element the reference writes; `info` is checked
+        // immediately after each call.
         unsafe {
             dev_lapack::c_zgesv(
                 &n_i32,

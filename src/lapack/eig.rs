@@ -872,7 +872,7 @@ pub fn dhseqr(t: &mut [f64], wr: &mut [f64], wi: &mut [f64], n: usize) -> Result
 ///
 /// The test `dhseqr_with_schur_vectors_gives_the_schur_decomposition` checks
 /// `A = Z T Z^T` and that `Z` is orthogonal.
-pub fn dhseqr_with_schur_vectors(t: &mut [f64], wr: &mut [f64], wi: &mut [f64], z: &mut [f64], n: usize) -> Result<(), LapackError> {
+pub(crate) fn dhseqr_with_schur_vectors(t: &mut [f64], wr: &mut [f64], wi: &mut [f64], z: &mut [f64], n: usize) -> Result<(), LapackError> {
     dhseqr_impl(t, wr, wi, Some(z), n)
 }
 
@@ -1591,7 +1591,7 @@ fn dgebak_right(v: &mut [f64], n: usize, ilo: usize, ihi: usize, scale: &[f64]) 
 /// 1. scale `A` if its largest element is outside `[SMLNUM, BIGNUM]`;
 /// 2. `dgebal` (`JOB = 'B'`): permute and scale to improve conditioning;
 /// 3. [`dgehrd`]: `A = Q H Q^T`, with `Q` accumulated;
-/// 4. [`dhseqr_with_schur_vectors`] (`COMPZ = 'V'`): `A = Z T Z^T`, accumulating
+/// 4. `dhseqr_with_schur_vectors` (`COMPZ = 'V'`): `A = Z T Z^T`, accumulating
 ///    the Schur vectors into `Q`, so that afterwards `Z` holds them;
 /// 5. `dtrevc_right` (`DTREVC3` with `SIDE = 'R'`, `HOWMNY = 'B'`):
 ///    eigenvectors of `T`, back-transformed by `Z`;
@@ -2184,7 +2184,7 @@ fn dgeev_unpack(raw: &[f64], wi: &[f64], re: &mut [f64], im: &mut [f64], n: usiz
 /// right eigenvectors of a general real square matrix.
 ///
 /// This is the same pipeline as [`dgeev`] -- scale, `dgebal`, [`dgehrd`],
-/// [`dhseqr_with_schur_vectors`], the `dtrevc3` back-substitutions,
+/// `dhseqr_with_schur_vectors`, the `dtrevc3` back-substitutions,
 /// `dgebak_right`/`dgebak_left`, normalization -- with the left eigenvectors
 /// taken from the *same* Schur factorization by `dtrevc_left` rather than from
 /// a second decomposition of `A^T`.

@@ -7,8 +7,8 @@ target, including `wasm32-unknown-unknown`.
 
 | module | contents |
 |---|---|
-| `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zheev`-support kernels, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `dz nrm2` |
-| `lapack` | drivers: `dgesv`, `dgetrf`, `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors, eigenvalues only), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines, the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families the tests use |
+| `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `dznrm2` |
+| `lapack` | drivers: `dgesv`, `dgetrf`, `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
 
 Not every BLAS or LAPACK routine is here: the port covers the drivers a dense
 linear-algebra caller needs. Each function names the reference source it follows (for example
@@ -29,7 +29,7 @@ linear-algebra caller needs. Each function names the reference source it follows
 ## Tests
 
 ```bash
-cargo test                      # 139 tests: the kernels against closed-form results
+cargo test                      # the kernels against closed-form results and invariants
 ```
 
 The reference-parity harness is development-only and lives behind a feature: it
@@ -38,8 +38,11 @@ compares the kernels against it.
 
 ```bash
 ALGEBRA_LINEAR_DEV_LAPACK_ROOT=/path/to/lapack/build \
-  cargo test --features dev_lapack            # 152 tests
+  cargo test --features dev_lapack            # the same, plus the parity tests
 ```
+
+Do not reach for `--all-features` here: `dev_lapack` is the only feature, so it
+selects the harness, which cannot build without a local LAPACK.
 
 `ALGEBRA_LINEAR_DEV_LAPACK_ROOT` must be a CMake build directory holding
 `include/lapack.h` and `lib/liblapack.so`. There is no default: recording one would

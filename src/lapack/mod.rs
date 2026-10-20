@@ -322,7 +322,8 @@ pub use super::blas::dlange;
 /// `mat_norm` can forward its value unchanged instead of mapping characters.
 /// They match LAPACK's own norm codes: 1 = one-norm, 2 = infinity, 3 =
 /// Frobenius, 4 = maximum absolute entry.
-pub fn dlange_by_code(norm_code: i32, a: &[f64], m: usize, n: usize) -> f64 {
+#[cfg(test)]
+pub(crate) fn dlange_by_code(norm_code: i32, a: &[f64], m: usize, n: usize) -> f64 {
     super::blas::dlange(norm_char(norm_code), a, m, n)
 }
 
@@ -529,8 +530,8 @@ mod tests {
         assert_eq!(dpotrf(&mut a, 0), Ok(()));
     }
 
-    /// `norm_char` is the code-to-character mapping and `dlange_by_code` is the
-    /// bridge from a numeric code to it. Both were
+    /// `norm_char` is the code-to-character mapping and `dlange_by_code` is a
+    /// test-only bridge from a numeric code to it. Both were
     /// untested: a wrong discriminant would only show up as a wrong-normed
     /// scaling decision inside `dgesvd` or `dsyev`.
     #[test]

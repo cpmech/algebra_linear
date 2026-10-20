@@ -500,6 +500,12 @@ unsafe fn gemm_micro_4x4(ap: *const f64, lda: usize, bp: *const f64, ldb: usize,
     // The whole body is unsafe: raw-pointer reads on the packed panels and
     // the AVX2/FMA intrinsics. Written as one block so the pre-2024 `unsafe
     // fn` allowance does not hide which operations are actually unsafe.
+    //
+    // SAFETY: the function's `# Safety` section states the contract -- `ap` and `bp`
+    // hold four rows (columns) by `kc` elements at the packed strides `lda`/`ldb`,
+    // and `c` holds four rows by four columns at `ldc`. `gemm_panel` is the only
+    // caller and enters here only when `i + 4 <= mc <= lda`, `j + 4 <= nc` and
+    // `kc >= 1`, which is that contract.
     unsafe {
         let mut c0 = _mm256_setzero_pd();
         let mut c1 = _mm256_setzero_pd();

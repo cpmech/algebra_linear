@@ -118,9 +118,22 @@ The second run is the same 139 plus the 13 reference-parity tests. `fmt`, `clipp
 than trusting these numbers when you touch the kernels.
 
 Every driver the crate exposes is implemented natively — `dgesv`, `dgetrf`,
-`dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (with balancing, left vectors, and an
-eigenvalues-only entry), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetri`,
+`dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (with balancing and left
+vectors -- there is no eigenvalues-only entry: the transcription computes the
+vectors, so a caller that only wants the spectrum pays for them; russell's
+`mat_eigenvalues` measures no penalty for that), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetri`,
 `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev` — with no `not_implemented` guards left.
+
+## Releasing
+
+1. `cargo publish --dry-run` -- the tarball is complete and builds on its own. `exclude` in
+   `Cargo.toml` keeps the process files (this one, `.github/`, `.gitignore`, `rustfmt.toml`)
+   out of it; code, README, LICENSE and the reference harness are what ship.
+2. Bump `version`, commit, tag `vX.Y.Z`, push the tag -- CI then repeats the dry run in its
+   `Package` step, so a broken package cannot reach crates.io.
+3. `cargo publish`.
+4. Only after the crate is on crates.io, raise the consumer's requirement: `russell_lab` pins
+   `algebra_linear = "X"`, and a consumer must never point at a version that is not published.
 
 ## Licence
 

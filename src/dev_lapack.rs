@@ -24,6 +24,15 @@
 //! Only `crate::parity`, and only under `#[cfg(all(test, feature = "dev_lapack"))]`.
 //! Nothing here is public API: the module is `pub(crate)` and the harness is a
 //! private test module, so no part of it reaches `cargo doc` or docs.rs.
+//!
+//! # Safety
+//!
+//! Every function here hands raw pointers to LAPACK. The invariant each one relies
+//! on is the reference's own: `n` (or `m` and `n`) describes the matrix the slices
+//! hold, `ld` is that matrix's leading dimension, and the workspace is at least what
+//! the `lwork = -1` query returned. The wrappers assert the slice lengths they can
+//! check, and their only callers are the parity tests in `crate::parity`, which size
+//! every buffer from the same `n` they pass.
 
 #![allow(dead_code)]
 
@@ -180,6 +189,12 @@ pub(crate) mod query {
     /// eigenvalues, `vr` the right eigenvectors (if `want_v`).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn dgeev(a: &mut [f64], n: usize, wr: &mut [f64], wi: &mut [f64], vr: Option<&mut [f64]>) -> i32 {
+        assert_eq!(a.len(), n * n, "reference dgeev: a must be n*n");
+        assert_eq!(wr.len(), n, "reference dgeev: wr must have n entries");
+        assert_eq!(wi.len(), n, "reference dgeev: wi must have n entries");
+        if let Some(v) = &vr {
+            assert_eq!(v.len(), n * n, "reference dgeev: vr must be n*n when requested");
+        }
         let n_i32 = n as i32;
         let ld = n_i32;
         let mut info = 0i32;
@@ -195,6 +210,9 @@ pub(crate) mod query {
         // Workspace query.
         let mut work = vec![0.0f64; 1];
         let mut lwork = -1i32;
+        // SAFETY: every pointer comes from a slice whose length the assertions at the top
+        // of this function pin to the LAPACK argument it feeds, `ld` is that matrix's
+        // leading dimension, and `work` is at least the size the `lwork = -1` query returned.
         unsafe {
             c_dgeev(
                 C_FALSE,
@@ -219,6 +237,9 @@ pub(crate) mod query {
         let need = work[0].max(1.0) as usize;
         let mut work = vec![0.0f64; need];
         lwork = need as i32;
+        // SAFETY: every pointer comes from a slice whose length the assertions at the top
+        // of this function pin to the LAPACK argument it feeds, `ld` is that matrix's
+        // leading dimension, and `work` is at least the size the `lwork = -1` query returned.
         unsafe {
             c_dgeev(
                 C_FALSE,
@@ -242,6 +263,8 @@ pub(crate) mod query {
 
     /// Runs `dsyev` in the lower triangle, with a correctly sized workspace.
     pub(crate) fn dsyev(a: &mut [f64], n: usize, w: &mut [f64], want_v: bool) -> i32 {
+        assert_eq!(a.len(), n * n, "reference dsyev: a must be n*n");
+        assert_eq!(w.len(), n, "reference dsyev: w must have n entries");
         let n_i32 = n as i32;
         let ld = n_i32;
         let mut info = 0i32;
@@ -249,6 +272,9 @@ pub(crate) mod query {
 
         let mut work = vec![0.0f64; 1];
         let mut lwork = -1i32;
+        // SAFETY: every pointer comes from a slice whose length the assertions at the top
+        // of this function pin to the LAPACK argument it feeds, `ld` is that matrix's
+        // leading dimension, and `work` is at least the size the `lwork = -1` query returned.
         unsafe {
             c_dsyev(
                 jobz,
@@ -268,6 +294,9 @@ pub(crate) mod query {
         let need = work[0].max(1.0) as usize;
         let mut work = vec![0.0f64; need];
         lwork = need as i32;
+        // SAFETY: every pointer comes from a slice whose length the assertions at the top
+        // of this function pin to the LAPACK argument it feeds, `ld` is that matrix's
+        // leading dimension, and `work` is at least the size the `lwork = -1` query returned.
         unsafe {
             c_dsyev(
                 jobz,
@@ -286,6 +315,8 @@ pub(crate) mod query {
 
     /// Runs `zheev` in the lower triangle, with a correctly sized workspace.
     pub(crate) fn zheev(a: &mut [Complex64], n: usize, w: &mut [f64], want_v: bool) -> i32 {
+        assert_eq!(a.len(), n * n, "reference zheev: a must be n*n");
+        assert_eq!(w.len(), n, "reference zheev: w must have n entries");
         let n_i32 = n as i32;
         let ld = n_i32;
         let mut info = 0i32;
@@ -294,6 +325,9 @@ pub(crate) mod query {
         let mut work = vec![Complex64::new(0.0, 0.0); 1];
         let mut rwork = vec![0.0f64; (3 * n).max(1)];
         let mut lwork = -1i32;
+        // SAFETY: every pointer comes from a slice whose length the assertions at the top
+        // of this function pin to the LAPACK argument it feeds, `ld` is that matrix's
+        // leading dimension, and `work` is at least the size the `lwork = -1` query returned.
         unsafe {
             c_zheev(
                 jobz,
@@ -314,6 +348,9 @@ pub(crate) mod query {
         let need = work[0].re.max(1.0) as usize;
         let mut work = vec![Complex64::new(0.0, 0.0); need];
         lwork = need as i32;
+        // SAFETY: every pointer comes from a slice whose length the assertions at the top
+        // of this function pin to the LAPACK argument it feeds, `ld` is that matrix's
+        // leading dimension, and `work` is at least the size the `lwork = -1` query returned.
         unsafe {
             c_zheev(
                 jobz,
@@ -336,10 +373,17 @@ pub(crate) mod query {
     pub(crate) fn dgesvd(a: &mut [f64], m: usize, n: usize, s: &mut [f64], u: &mut [f64], vt: &mut [f64]) -> i32 {
         let (m_i32, n_i32) = (m as i32, n as i32);
         let min_mn = m.min(n);
+        assert_eq!(a.len(), m * n, "reference dgesvd: a must be m*n");
+        assert_eq!(u.len(), m * m, "reference dgesvd: u must be m*m");
+        assert_eq!(vt.len(), n * n, "reference dgesvd: vt must be n*n");
+        assert_eq!(s.len(), m.min(n), "reference dgesvd: s must be min(m,n)");
         let mut info = 0i32;
 
         let mut work = vec![0.0f64; 1];
         let mut lwork = -1i32;
+        // SAFETY: every pointer comes from a slice whose length the assertions at the top
+        // of this function pin to the LAPACK argument it feeds, `ld` is that matrix's
+        // leading dimension, and `work` is at least the size the `lwork = -1` query returned.
         unsafe {
             c_dgesvd(
                 svd_code::ALL,
@@ -365,6 +409,9 @@ pub(crate) mod query {
         let mut work = vec![0.0f64; need];
         lwork = need as i32;
         let _ = min_mn;
+        // SAFETY: every pointer comes from a slice whose length the assertions at the top
+        // of this function pin to the LAPACK argument it feeds, `ld` is that matrix's
+        // leading dimension, and `work` is at least the size the `lwork = -1` query returned.
         unsafe {
             c_dgesvd(
                 svd_code::ALL,
