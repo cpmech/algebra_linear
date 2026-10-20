@@ -8,6 +8,11 @@
 //! so the parity tests can compare the kernels against the reference. It is not
 //! for release — set `ALGEBRA_LINEAR_DEV_LAPACK_ROOT` to a CMake build directory
 //! that holds `include/lapack.h` and `lib/liblapack.so`.
+//!
+//! This script fails loudly when that directory is absent or incomplete, and pins
+//! the build it linked with an `rpath`. It prints nothing on success: which build a
+//! test binary runs against is answered by `ldd` on that binary, and a build log is
+//! not the place for good news.
 
 fn main() {
     #[cfg(feature = "dev_lapack")]
@@ -22,7 +27,7 @@ fn main() {
 /// The reference LAPACK, for the parity harness only.
 #[cfg(feature = "dev_lapack")]
 mod dev_lapack {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     /// Compiles the reference bindings against a locally built LAPACK and links it.
     ///
@@ -82,9 +87,5 @@ mod dev_lapack {
         // The header holds the prototypes; `cc` does not track includes on its own.
         println!("cargo:rerun-if-changed=c_code/reference.h");
         println!("cargo:rerun-if-changed=c_code/reference_lapack.c");
-        println!("cargo:warning=algebra_linear: `dev_lapack` ON -- tests compare against {root}");
-
-        // Silence the unused import warning in the non-feature path.
-        let _ = PathBuf::new();
     }
 }
