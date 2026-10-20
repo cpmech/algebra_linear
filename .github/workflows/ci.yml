@@ -1,0 +1,48 @@
+name: CI
+# The default build is the one that must always work: pure Rust, no external
+# library, any target. The reference-parity harness (`dev_lapack`) needs a locally
+# built LAPACK and is therefore a local command, not a job here — see README.
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Standalone -- no path dependencies
+        run: |
+          # This crate stands alone: it may not depend on a local checkout of a
+          # project that consumes it.
+          if grep -nE '^[a-z_]+ *= *\{[^}]*path *=' Cargo.toml; then
+            echo "::error::a path dependency was added; this crate must not depend on a local checkout"
+            exit 1
+          fi
+      - name: Test
+        run: cargo test --lib
+
+  wasm:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+      CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,wasm32-wasip1
+      - name: Install wasmtime
+        run: |
+          curl -sSf https://wasmtime.dev/install.sh | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Build for wasm32-unknown-unknown
+        run: cargo build --lib --target wasm32-unknown-unknown
+      - name: Run the tests on wasm (generic kernel, no SIMD requirement)
+        run: cargo test --lib --target wasm32-wasip1
