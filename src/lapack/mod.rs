@@ -58,7 +58,7 @@ mod checkers;
 #[cfg(test)]
 mod examples;
 #[cfg(test)]
-mod families;
+pub(crate) mod families;
 
 use super::blas;
 

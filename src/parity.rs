@@ -1076,3 +1076,207 @@ fn dggev_satisfies_its_defining_equation() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Triangular solves. The reference comparison is `dgesv` on the same triangular matrix: LAPACK
+// has a `dtrtrs` driver, but the harness binds the drivers it already uses, and the solution is
+// the observable result either way.
+// ---------------------------------------------------------------------------------------------
+
+/// A deterministic triangular matrix with a dominant diagonal.
+fn triangular(n: usize, lower: bool) -> Vec<f64> {
+    let mut a = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let stored = if lower { i >= j } else { i <= j };
+            if !stored {
+                continue;
+            }
+            a[i + j * n] = if i == j {
+                4.0 + i as f64
+            } else {
+                0.25 * (((i * 3 + j * 5) % 4) as f64 - 1.5)
+            };
+        }
+    }
+    a
+}
+
+fn matvec(a: &[f64], x: &[f64], n: usize) -> Vec<f64> {
+    let mut b = vec![0.0; n];
+    crate::blas::dgemv(1.0, a, x, 0.0, &mut b, n, n);
+    b
+}
+
+fn transpose(a: &[f64], n: usize) -> Vec<f64> {
+    let mut at = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            at[i + j * n] = a[j + i * n];
+        }
+    }
+    at
+}
+
+/// Solves through the reference `dgesv`; the caller passes a fresh copy of `a`.
+fn reference_solve(a: &mut [f64], b: &mut [f64], n: usize, nrhs: usize) {
+    let n_i32 = n as i32;
+    let nrhs_i32 = nrhs as i32;
+    let mut ipiv = vec![0i32; n];
+    let mut info = 0i32;
+    // SAFETY: the buffers are local vectors sized from this test's `n`, so they hold every
+    // element the reference writes; `info` is checked immediately after the call.
+    unsafe {
+        dev_lapack::c_dgesv(
+            &n_i32,
+            &nrhs_i32,
+            a.as_mut_ptr(),
+            &n_i32,
+            ipiv.as_mut_ptr(),
+            b.as_mut_ptr(),
+            &n_i32,
+            &mut info,
+        );
+    }
+    assert_eq!(info, 0, "reference dgesv failed for n={n}");
+}
+
+#[test]
+fn triangular_vector_solves_agree_with_the_reference() {
+    for n in [1usize, 2, 4, 7] {
+        for lower in [true, false] {
+            let a = triangular(n, lower);
+            let x_true: Vec<f64> = (0..n).map(|i| 1.0 + (i as f64) * 0.5).collect();
+            let b = matvec(&a, &x_true, n);
+
+            let mut native = b.clone();
+            crate::blas::dtrsv(&a, &mut native, n, lower, false);
+            let mut b_ref = b.clone();
+            reference_solve(&mut a.clone(), &mut b_ref, n, 1);
+            compare_vectors(&format!("dtrsv (n={n}, lower={lower})"), &native, &b_ref, TOL);
+
+            let at = transpose(&a, n);
+            let bt = matvec(&at, &x_true, n);
+            let mut native = bt.clone();
+            crate::blas::dtrsv_transpose(&a, &mut native, n, lower, false);
+            let mut bt_ref = bt.clone();
+            reference_solve(&mut at.clone(), &mut bt_ref, n, 1);
+            compare_vectors(&format!("dtrsv_transpose (n={n}, lower={lower})"), &native, &bt_ref, TOL);
+        }
+    }
+}
+
+#[test]
+fn triangular_matrix_solves_agree_with_the_reference() {
+    for n in [2usize, 5] {
+        let a = triangular(n, true);
+        let nrhs = 2;
+        let x_true: Vec<f64> = (0..n * nrhs).map(|i| 1.0 + (i % 5) as f64).collect();
+        let mut b = vec![0.0; n * nrhs];
+        for j in 0..nrhs {
+            for i in 0..n {
+                for k in 0..n {
+                    b[i + j * n] += a[i + k * n] * x_true[k + j * n];
+                }
+            }
+        }
+        let mut native = b.clone();
+        crate::blas::dtrsm(1.0, &a, &mut native, n, nrhs, true, true, false);
+        let mut b_ref = b.clone();
+        reference_solve(&mut a.clone(), &mut b_ref, n, nrhs);
+        compare_vectors(&format!("dtrsm (n={n})"), &native, &b_ref, TOL);
+    }
+}
+
+/// A deterministic complex triangular matrix.
+fn complex_triangular(n: usize, lower: bool) -> Vec<Complex64> {
+    let mut a = vec![Complex64::new(0.0, 0.0); n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let stored = if lower { i >= j } else { i <= j };
+            if !stored {
+                continue;
+            }
+            a[i + j * n] = if i == j {
+                Complex64::new(4.0 + i as f64, 1.0)
+            } else {
+                Complex64::new(0.25 * (((i * 3 + j * 5) % 4) as f64 - 1.5), 0.125)
+            };
+        }
+    }
+    a
+}
+
+fn compare_complex_vectors(label: &str, got: &[Complex64], want: &[Complex64], tol: f64) {
+    assert_eq!(got.len(), want.len(), "{label}: length mismatch");
+    for i in 0..got.len() {
+        let scale = want[i].norm().max(1.0);
+        let err = (got[i] - want[i]).norm() / scale;
+        assert!(
+            err < tol,
+            "{label}: component {i} is {} but the reference says {} (relative error {err:e})",
+            got[i],
+            want[i]
+        );
+    }
+}
+
+#[test]
+fn complex_triangular_vector_solves_agree_with_the_reference() {
+    for n in [1usize, 3, 6] {
+        let a = complex_triangular(n, true);
+        let x_true: Vec<Complex64> = (0..n).map(|i| Complex64::new(1.0 + i as f64, -0.5)).collect();
+        let mut b = vec![Complex64::new(0.0, 0.0); n];
+        for i in 0..n {
+            for k in 0..n {
+                b[i] += a[i + k * n] * x_true[k];
+            }
+        }
+        let mut native = b.clone();
+        crate::blas::ztrsv(&a, &mut native, n, true, false);
+
+        let n_i32 = n as i32;
+        let mut a_ref = a.clone();
+        let mut b_ref = b.clone();
+        let mut ipiv = vec![0i32; n];
+        let mut info = 0i32;
+        // SAFETY: the buffers are local vectors sized from this test's `n`.
+        unsafe {
+            dev_lapack::c_zgesv(
+                &n_i32,
+                &1i32,
+                a_ref.as_mut_ptr(),
+                &n_i32,
+                ipiv.as_mut_ptr(),
+                b_ref.as_mut_ptr(),
+                &n_i32,
+                &mut info,
+            );
+        }
+        assert_eq!(info, 0, "reference zgesv failed for n={n}");
+        compare_complex_vectors(&format!("ztrsv (n={n})"), &native, &b_ref, TOL);
+    }
+}
+
+#[test]
+fn panel_lu_solves_square_panels_like_the_reference() {
+    for n in [1usize, 2, 4, 7] {
+        let a = sample(n);
+        let x_true: Vec<f64> = (0..n).map(|i| 1.0 + (i as f64) * 0.5).collect();
+        let b = matvec(&a, &x_true, n);
+
+        let mut lu = a.clone();
+        let mut ipiv = vec![0usize; n];
+        lapack::dgetrf_rect(&mut lu, n, n, &mut ipiv).unwrap();
+        let mut x = b.clone();
+        for k in 0..n {
+            x.swap(k, ipiv[k]);
+        }
+        crate::blas::dtrsv(&lu, &mut x, n, true, true);
+        crate::blas::dtrsv(&lu, &mut x, n, false, false);
+
+        let mut b_ref = b.clone();
+        reference_solve(&mut a.clone(), &mut b_ref, n, 1);
+        compare_vectors(&format!("dgetrf_rect solve (n={n})"), &x, &b_ref, TOL);
+    }
+}

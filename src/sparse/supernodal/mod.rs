@@ -164,6 +164,68 @@ impl SymbolicSupernodal {
     pub fn supernode_size(&self, s: usize) -> usize {
         self.supernode_ptr[s + 1] - self.supernode_ptr[s]
     }
+
+    /// Returns a copy with adjacent supernodes amalgamated.
+    ///
+    /// A child is merged into its parent when the two are adjacent in the
+    /// ordering, the child has at most `max_child_size` columns, and the extra
+    /// zeros the merge introduces are at most `fill_tolerance` times the
+    /// expanded diagonal-block size. The pass is a simplified version of faer's
+    /// relaxation: it keeps faer's fill estimate but drops the child-list
+    /// search, so it considers only the immediately preceding supernode.
+    ///
+    /// The column counts and the elimination tree are unchanged; only the
+    /// partition and the supernode tree are rebuilt.
+    pub fn with_relaxation(mut self, max_child_size: usize, fill_tolerance: f64) -> Self {
+        let n = self.n;
+        if n == 0 {
+            return self;
+        }
+        let ns = self.n_supernodes();
+        let mut sizes: Vec<usize> = (0..ns).map(|s| self.supernode_ptr[s + 1] - self.supernode_ptr[s]).collect();
+        let degrees: Vec<usize> = (0..ns)
+            .map(|s| self.col_counts[self.supernode_ptr[s + 1] - 1].saturating_sub(1))
+            .collect();
+        let mut alive = vec![true; ns];
+        for parent in 1..ns {
+            let child = parent - 1;
+            if !alive[child] || sizes[child] > max_child_size {
+                continue;
+            }
+            let combined = sizes[parent] + sizes[child];
+            let degree_gain = degrees[parent].saturating_sub(degrees[child]);
+            let extra_zeros = (sizes[parent] + degree_gain) * sizes[child];
+            let expanded = combined * (combined + 1) / 2 + degrees[parent] * combined;
+            if extra_zeros as f64 <= fill_tolerance * expanded as f64 {
+                sizes[parent] = combined;
+                alive[child] = false;
+            }
+        }
+        let mut supernode_ptr = Vec::with_capacity(ns + 1);
+        supernode_ptr.push(0);
+        for s in 0..ns {
+            if alive[s] {
+                supernode_ptr.push(supernode_ptr.last().copied().unwrap_or(0) + sizes[s]);
+            }
+        }
+        let n_supernodes = supernode_ptr.len() - 1;
+        let mut index_to_super = vec![0usize; n];
+        for s in 0..n_supernodes {
+            for c in supernode_ptr[s]..supernode_ptr[s + 1] {
+                index_to_super[c] = s;
+            }
+        }
+        let mut super_etree = vec![-1isize; n_supernodes];
+        for s in 0..n_supernodes {
+            let last = supernode_ptr[s + 1] - 1;
+            if self.etree[last] >= 0 {
+                super_etree[s] = index_to_super[self.etree[last] as usize] as isize;
+            }
+        }
+        self.supernode_ptr = supernode_ptr;
+        self.super_etree = super_etree;
+        self
+    }
 }
 
 /// Transposes a CSC pattern with a counting sort, producing sorted row indices.
@@ -545,6 +607,53 @@ mod tests {
         let s = SymbolicSupernodal::analyze(pattern).unwrap();
         assert_eq!(s.n_supernodes(), 0);
         assert_eq!(s.supernode_ptr(), &[0]);
+    }
+
+    #[test]
+    fn relaxation_merges_adjacent_supernodes() {
+        let (cp, ri) = grid4x5();
+        let n = cp.len() - 1;
+        let pattern = CscPattern::new(n, n, &cp, &ri).unwrap();
+        let base = SymbolicSupernodal::analyze(pattern).unwrap();
+        let relaxed = base.clone().with_relaxation(2, 0.5);
+        assert!(relaxed.n_supernodes() <= base.n_supernodes());
+        assert_eq!(relaxed.supernode_ptr()[0], 0);
+        assert_eq!(*relaxed.supernode_ptr().last().unwrap(), n);
+        assert_eq!(relaxed.col_counts(), base.col_counts());
+        assert_eq!(relaxed.etree(), base.etree());
+        assert_eq!(relaxed.supernode_ptr()[relaxed.n_supernodes()], n);
+        for i in 0..relaxed.n_supernodes() {
+            assert!(relaxed.supernode_size(i) > 0);
+            let parent = relaxed.super_etree()[i];
+            assert!(parent == -1 || parent > i as isize);
+        }
+        // At least one merge has to happen for a cutoff this generous.
+        assert!(relaxed.n_supernodes() < base.n_supernodes());
+    }
+
+    #[test]
+    fn relaxed_supernodes_solve_like_the_simplicial_path() {
+        let (cp, ri) = grid4x5();
+        let n = cp.len() - 1;
+        // Use the diagonal check per column instead of the row index heuristic.
+        let mut values = vec![0.0; ri.len()];
+        for j in 0..n {
+            for k in cp[j]..cp[j + 1] {
+                values[k] = if ri[k] == j { 5.0 } else { 1.0 };
+            }
+        }
+        let pattern = CscPattern::new(n, n, &cp, &ri).unwrap();
+        let view = crate::sparse::CscView::new(n, n, &cp, &ri, &values).unwrap();
+        let simplicial = crate::sparse::SymbolicLu::analyze(pattern).unwrap();
+        let mut b0 = vec![1.0; n];
+        simplicial.factorize(view).unwrap().solve(&mut b0).unwrap();
+
+        let relaxed = SymbolicSupernodal::analyze(pattern).unwrap().with_relaxation(2, 0.5);
+        let mut b1 = vec![1.0; n];
+        relaxed.factorize(view).unwrap().solve(&mut b1).unwrap();
+        for i in 0..n {
+            assert!((b0[i] - b1[i]).abs() < 1e-10, "entry {i}");
+        }
     }
 
     #[test]
