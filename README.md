@@ -45,7 +45,7 @@ ALGEBRA_LINEAR_DEV_LAPACK_ROOT=/path/to/lapack/build \
 `include/lapack.h` and `lib/liblapack.so`. There is no default: recording one would
 put a developer's directory layout into released source.
 
-## Licence and provenance
+## License
 
 BSD 3-Clause. The kernels are a transcription of LAPACK 3.12.1 and its reference
 BLAS, whose copyright notice and conditions are reproduced verbatim in
