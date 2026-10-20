@@ -46,11 +46,13 @@ pub mod csc;
 pub mod lu;
 pub mod ordering;
 pub mod perm;
+mod stats;
 pub mod symbolic;
 
 pub use csc::{CscPattern, CscView};
 pub use lu::{LuFactors, SparseScalar};
 pub use ordering::colamd::{ColamdControl, ColamdOrdering, colamd_order};
+pub use stats::SparseLuStats;
 pub use symbolic::SymbolicLu;
 
 /// Errors reported by the sparse routines.

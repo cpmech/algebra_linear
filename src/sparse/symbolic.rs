@@ -6,6 +6,8 @@
 //! supernodal analysis are only needed by the supernodal path and are not part
 //! of this module yet.
 
+use std::time::{Duration, Instant};
+
 use super::csc::CscPattern;
 use super::ordering::colamd::{ColamdControl, colamd_order};
 use super::{SparseError, perm};
@@ -21,6 +23,7 @@ pub struct SymbolicLu {
     fingerprint: u64,
     col_perm: Vec<usize>,
     col_perm_inv: Vec<usize>,
+    ordering_time: Duration,
 }
 
 impl SymbolicLu {
@@ -35,7 +38,9 @@ impl SymbolicLu {
         if pattern.nrows() != pattern.ncols() {
             return Err(SparseError::BadShape);
         }
+        let start = Instant::now();
         let ordering = colamd_order(pattern, ColamdControl::default())?;
+        let ordering_time = start.elapsed();
         debug_assert!(perm::is_permutation(ordering.perm()));
         Ok(Self {
             n: pattern.ncols(),
@@ -43,6 +48,7 @@ impl SymbolicLu {
             fingerprint: fingerprint(pattern),
             col_perm: ordering.perm().to_vec(),
             col_perm_inv: ordering.perm_inv().to_vec(),
+            ordering_time,
         })
     }
 
@@ -70,6 +76,12 @@ impl SymbolicLu {
     #[inline]
     pub fn col_perm_inv(&self) -> &[usize] {
         &self.col_perm_inv
+    }
+
+    /// Returns the time the ordering took during [`Self::analyze`].
+    #[inline]
+    pub fn ordering_time(&self) -> Duration {
+        self.ordering_time
     }
 
     /// Returns `true` if `pattern` has the structure this analysis was built
