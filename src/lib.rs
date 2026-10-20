@@ -25,6 +25,7 @@
 
 pub mod blas;
 pub mod lapack;
+pub mod sparse;
 
 pub(crate) mod constants;
 

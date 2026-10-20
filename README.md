@@ -1,4 +1,4 @@
-# algebra_linear -- Pure-Rust BLAS and LAPACK
+# algebra_linear -- Pure-Rust BLAS, LAPACK and sparse LU
 
 No external library, no C in a normal build, nothing to link — it compiles for any
 target, including `wasm32-unknown-unknown`.
@@ -8,10 +8,11 @@ target, including `wasm32-unknown-unknown`.
 | module | contents |
 |---|---|
 | `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `dznrm2` |
+| `sparse` | a simplicial sparse LU in CSC form (`CscView`, `SymbolicLu`, `LuFactors`) with real and complex scalars, plus its ported COLAMD ordering |
 | `lapack` | drivers: `dgesv`, `dgetrf`, `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
 
 Not every BLAS or LAPACK routine is here: the port covers the drivers a dense
-linear-algebra caller needs. Each function names the reference source it follows (for example
+linear-algebra caller needs, plus a sparse LU with a COLAMD ordering. Each function names the reference source it follows (for example
 "transcription of `dsytrd`/`dlatrd`") so it can be checked against LAPACK 3.12.1.
 
 ## Conventions
