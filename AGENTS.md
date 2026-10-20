@@ -34,8 +34,13 @@ harness described below.
 - **American English everywhere** — comments, docs, identifiers, test names, commit
   messages: `behavior`, `normalize`, `factorization`, `center`, `toward`. The
   British variants are not used.
-- **Keep the tree rustfmt-clean** (`rustfmt.toml` here sets `max_width = 120`) and
-  `cargo clippy --all-targets` warning-free.
+- **Keep the tree rustfmt-clean** (`rustfmt.toml` here sets `max_width = 120`); CI enforces this.
+- **Keep `cargo clippy --all-targets` warning-free**, as a review requirement — CI does not run
+  clippy. Its lint set moves with the toolchain, so a new stable would fail the build on style the
+  transcription inherits from LAPACK (1.99's `needless_late_init` on a variable the reference
+  declares at the top of a block and assigns in each branch is the case in point). Judge such a hit
+  on its merits: allow the lint in `[lints.clippy]` with the reason, or restructure — but do not
+  leave it sitting as a warning.
 - **Never change production code to satisfy a coverage tool's limits.** Add real
   tests or leave the gap documented.
 
