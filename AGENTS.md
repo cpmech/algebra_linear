@@ -34,7 +34,8 @@ harness described below.
 - **American English everywhere** — comments, docs, identifiers, test names, commit
   messages: `behavior`, `normalize`, `factorization`, `center`, `toward`. The
   British variants are not used.
-- **Keep the tree rustfmt-clean** (`rustfmt.toml` here sets `max_width = 120`); CI enforces this.
+- **Keep the tree rustfmt-clean** — `rustfmt.toml` holds the settings, so do not restate them here.
+  CI enforces this.
 - **Keep `cargo clippy --all-targets` warning-free**, as a review requirement — CI does not run
   clippy. Its lint set moves with the toolchain, so a new stable would fail the build on style the
   transcription inherits from LAPACK (1.99's `needless_late_init` on a variable the reference
