@@ -157,6 +157,53 @@ fn ztrti2_upper(a: &mut [Complex64], n: usize) -> Result<(), LapackError> {
     Ok(())
 }
 
+/// `zgetrf_rect`: LU factorization of a complex rectangular panel.
+///
+/// Complex twin of [`super::dgetrf_rect`]; the panel is `nrows x ncols` with
+/// `nrows >= ncols`, and the pivot search uses `|Re| + |Im|`, as `zgetf2` does.
+///
+/// # Errors
+///
+/// [`LapackError::BadShape`] if the lengths disagree or `nrows < ncols`, and
+/// [`LapackError::Singular`] if a pivot is zero.
+pub fn zgetrf_rect(a: &mut [Complex64], nrows: usize, ncols: usize, ipiv: &mut [usize]) -> Result<(), LapackError> {
+    if nrows < ncols || a.len() != nrows * ncols || ipiv.len() != ncols {
+        return Err(LapackError::BadShape);
+    }
+    if ncols == 0 {
+        return Ok(());
+    }
+    for k in 0..ncols {
+        let mut pivot = k;
+        let mut best = abs1(a[k + k * nrows]);
+        for i in k + 1..nrows {
+            let cand = abs1(a[i + k * nrows]);
+            if cand > best {
+                best = cand;
+                pivot = i;
+            }
+        }
+        if best <= ZERO_DETERMINANT {
+            return Err(LapackError::Singular);
+        }
+        if pivot != k {
+            for j in 0..ncols {
+                a.swap(j * nrows + k, j * nrows + pivot);
+            }
+        }
+        ipiv[k] = pivot;
+        let d = a[k + k * nrows];
+        for i in k + 1..nrows {
+            let factor = a[i + k * nrows] / d;
+            a[i + k * nrows] = factor;
+            for j in k + 1..ncols {
+                a[i + j * nrows] -= factor * a[k + j * nrows];
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `zgetri`: inverse of a matrix from its [`zgetrf`] factorization, in place.
 ///
 /// Follows the reference: invert `U`, solve `inv(A) * L = inv(U)` column by
@@ -541,5 +588,59 @@ mod tests {
         let mut b: Vec<Complex64> = Vec::new();
         assert_eq!(zgesv(&mut a, &mut b), Ok(()));
         assert_eq!(zpotrf(&mut a, 0, false), Ok(()));
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+mod rect_tests {
+    use super::*;
+
+    #[test]
+    fn zgetrf_rect_reconstructs_a_tall_panel() {
+        use crate::cpx;
+        let (nrows, ncols) = (3, 2);
+        let a0 = vec![
+            cpx!(1.0, 1.0),
+            cpx!(3.0, 0.0),
+            cpx!(2.0, -1.0),
+            cpx!(2.0, 0.0),
+            cpx!(0.0, -1.0),
+            cpx!(4.0, 0.0),
+        ];
+        let mut a = a0.clone();
+        let mut ipiv = vec![0usize; ncols];
+        zgetrf_rect(&mut a, nrows, ncols, &mut ipiv).unwrap();
+        let mut pa = a0.clone();
+        for k in 0..ncols {
+            for j in 0..ncols {
+                pa.swap(j * nrows + k, j * nrows + ipiv[k]);
+            }
+        }
+        for j in 0..ncols {
+            for i in 0..nrows {
+                let mut sum = Complex64::new(0.0, 0.0);
+                for l in 0..ncols {
+                    let l_il = if i == l {
+                        Complex64::new(1.0, 0.0)
+                    } else if i > l {
+                        a[i + l * nrows]
+                    } else {
+                        Complex64::new(0.0, 0.0)
+                    };
+                    let u_lj = if l <= j { a[l + j * nrows] } else { Complex64::new(0.0, 0.0) };
+                    sum += l_il * u_lj;
+                }
+                assert!((sum - pa[i + j * nrows]).norm() < 1e-12, "entry {i},{j}");
+            }
+        }
+    }
+
+    #[test]
+    fn zgetrf_rect_rejects_bad_shapes() {
+        let mut a = [crate::cpx!(1.0, 0.0); 4];
+        let mut ipiv = [0usize; 2];
+        assert_eq!(zgetrf_rect(&mut a, 1, 2, &mut ipiv).unwrap_err(), LapackError::BadShape);
     }
 }
