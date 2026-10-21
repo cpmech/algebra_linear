@@ -1,4 +1,4 @@
-# algebra_linear -- Pure-Rust BLAS, LAPACK and sparse LU
+# algebra_linear -- Pure-Rust BLAS, LAPACK, and sparse LU
 
 No external library, no C in a normal build, nothing to link — it compiles for any
 target, including `wasm32-unknown-unknown`.

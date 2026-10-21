@@ -1,4 +1,4 @@
-algebra_linear — pure-Rust BLAS, LAPACK and sparse LU
+algebra_linear — pure-Rust BLAS, LAPACK, and sparse LU
 
 Copyright (c) 2026 Dorival Pedroso (the Rust transcription)
 
