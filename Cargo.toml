@@ -1,6 +1,6 @@
 [package]
 name = "algebra_linear"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
 license = "BSD-3-Clause"
 description = "Pure-Rust BLAS, LAPACK, and sparse LU"
@@ -48,3 +48,11 @@ needless_range_loop = "allow"    # allow "for i in a..b" instead of range
 new_without_default = "allow"    # The user is encouraged to call new()
 too_many_arguments = "allow"     # allow functions with many parameters
 type_complexity = "allow"        # allow deeply nested array types (index maps)
+
+# The sparse timing code uses `Instant`; the browser target has no
+# `std::time::Instant`, so map it to `performance.now()`.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+web-time = "1"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"

@@ -12,7 +12,11 @@
 //! applies those permutations around the two triangular solves.
 
 use core::ops::{AddAssign, Mul, SubAssign};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use std::time::Instant;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::Instant;
 
 use crate::Complex64;
 use crate::sparse::SparseError;
