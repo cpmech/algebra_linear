@@ -434,14 +434,15 @@ impl SymbolicSupernodal {
                     l_compress_rows[row].push(s);
                 }
             }
-            u_panel_cols[s] = c_cols.clone();
-
             for &row in &r_rows {
                 row_local[row] = usize::MAX;
             }
             for &c in &c_cols {
                 col_local[c] = usize::MAX;
             }
+            // Keep the column list for this supernode's C_s union without
+            // cloning it; `take` is restored by the next iteration's `clear`.
+            u_panel_cols[s] = core::mem::take(&mut c_cols);
         }
 
         // Convert L's original row indices to positions and sort both factors.
