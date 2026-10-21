@@ -163,6 +163,9 @@ impl SymbolicSupernodal {
         if !self.matches(a.pattern()) {
             return Err(SparseError::StructureMismatch);
         }
+        if a.values().iter().any(|v| !v.is_finite()) {
+            return Err(SparseError::NotFinite);
+        }
         let n = self.n;
         let ns = self.n_supernodes();
         let ptr = &self.supernode_ptr;
@@ -437,14 +440,12 @@ impl SymbolicSupernodal {
             }
             l_cols[j].sort_by_key(|(row, _)| *row);
             if l_cols[j].first().map(|(row, _)| *row) != Some(j) {
-                eprintln!("L diag mismatch j={j} rows={:?}", l_cols[j].iter().map(|(r, _)| *r).collect::<Vec<_>>());
                 return Err(SparseError::InvalidStructure);
             }
         }
         for c in 0..n {
             u_cols[c].sort_by_key(|(row, _)| *row);
             if u_cols[c].last().map(|(row, _)| *row) != Some(c) {
-                eprintln!("U diag mismatch c={c} rows={:?}", u_cols[c].iter().map(|(r, _)| *r).collect::<Vec<_>>());
                 return Err(SparseError::InvalidStructure);
             }
         }
@@ -817,6 +818,17 @@ mod tests {
             SymbolicSupernodal::analyze(pattern).unwrap().factorize(view).unwrap()
         };
         assert_eq!(f.solve(&mut b).unwrap_err(), SparseError::BadShape);
+    }
+
+    #[test]
+    fn rejects_nan_and_infinite_entries() {
+        let pattern = CscPattern::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1]).unwrap();
+        let symbolic = SymbolicSupernodal::analyze(pattern).unwrap();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let values = [4.0, 1.0, bad, 3.0];
+            let a = CscView::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1], &values).unwrap();
+            assert_eq!(symbolic.factorize(a).unwrap_err(), SparseError::NotFinite);
+        }
     }
 
     #[test]

@@ -86,6 +86,8 @@ pub enum SparseError {
     IndexOverflow,
     /// The pattern differs from the one the symbolic analysis was built for.
     StructureMismatch,
+    /// An entry of the matrix is NaN or infinite.
+    NotFinite,
 }
 
 impl core::fmt::Display for SparseError {
@@ -98,6 +100,7 @@ impl core::fmt::Display for SparseError {
             Self::Singular => "the matrix is singular",
             Self::IndexOverflow => "index or workspace size overflow",
             Self::StructureMismatch => "the matrix pattern differs from the symbolic analysis",
+            Self::NotFinite => "the matrix has a NaN or infinite entry",
         };
         f.write_str(msg)
     }

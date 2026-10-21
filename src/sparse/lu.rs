@@ -33,6 +33,8 @@ pub trait SparseScalar: Copy + AddAssign + SubAssign + Mul<Output = Self> {
     fn abs(self) -> f64;
     /// Returns the reciprocal.
     fn recip(self) -> Self;
+    /// Returns `true` if both parts are finite.
+    fn is_finite(self) -> bool;
 }
 
 impl SparseScalar for f64 {
@@ -52,6 +54,10 @@ impl SparseScalar for f64 {
     fn recip(self) -> Self {
         1.0 / self
     }
+    #[inline]
+    fn is_finite(self) -> bool {
+        f64::is_finite(self)
+    }
 }
 
 impl SparseScalar for Complex64 {
@@ -70,6 +76,10 @@ impl SparseScalar for Complex64 {
     #[inline]
     fn recip(self) -> Self {
         self.inv()
+    }
+    #[inline]
+    fn is_finite(self) -> bool {
+        self.re.is_finite() && self.im.is_finite()
     }
 }
 
@@ -262,6 +272,9 @@ impl SymbolicLu {
     /// [`SparseError::Singular`] if a column has no nonzero pivot.
     pub fn factorize<T: SparseScalar>(&self, a: CscView<'_, T>) -> Result<LuFactors<T>, SparseError> {
         self.check_pattern(a.pattern())?;
+        if a.values().iter().any(|v| !v.is_finite()) {
+            return Err(SparseError::NotFinite);
+        }
         let start = Instant::now();
         let n = self.n();
         let mut l_col_ptr = vec![0usize; n + 1];
@@ -900,6 +913,17 @@ mod tests {
         assert_eq!(s.fill_ratio, 0.0);
         assert_eq!(s.flops_estimate, 0);
         assert_eq!(s.nnz_factors(), 0);
+    }
+
+    #[test]
+    fn rejects_nan_and_infinite_entries() {
+        let pattern = CscPattern::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1]).unwrap();
+        let symbolic = SymbolicLu::analyze(pattern).unwrap();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let values = [4.0, 1.0, bad, 3.0];
+            let a = CscView::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1], &values).unwrap();
+            assert_eq!(symbolic.factorize(a).unwrap_err(), SparseError::NotFinite);
+        }
     }
 
     #[test]
