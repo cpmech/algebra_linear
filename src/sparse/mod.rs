@@ -2,8 +2,9 @@
 //!
 //! The module provides a simplicial sparse LU factorization in compressed sparse
 //! column (CSC) form, a supernodal one, and the COLAMD column ordering they use
-//! to reduce fill. The supernodal path is explicit for now: `SymbolicSupernodal`
-//! and `SupernodalLu`, not a threshold inside `SymbolicLu`.
+//! to reduce fill. The supernodal path is usable directly (`SymbolicSupernodal`,
+//! `SupernodalLu`) or through `LuSymbolic`/`LuMethod`, which chooses between the
+//! two with a flop proxy (or a forced method).
 //!
 //! # Provenance
 //!
@@ -48,6 +49,10 @@ mod etree;
 pub mod lu;
 pub mod ordering;
 pub mod perm;
+pub mod solver;
+
+#[cfg(test)]
+mod accuracy_tests;
 mod stats;
 pub mod supernodal;
 pub mod symbolic;
@@ -55,6 +60,7 @@ pub mod symbolic;
 pub use csc::{CscPattern, CscView};
 pub use lu::{LuFactors, SparseScalar};
 pub use ordering::colamd::{ColamdControl, ColamdOrdering, colamd_order};
+pub use solver::{LuMethod, LuSolver, LuSymbolic};
 pub use stats::SparseLuStats;
 pub use supernodal::{SupernodalLu, SymbolicSupernodal};
 pub use symbolic::SymbolicLu;
