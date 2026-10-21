@@ -329,6 +329,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_finite_values_in_both_methods() {
+        let (cp, ri) = tridiag(6);
+        for method in [LuMethod::Simplicial, LuMethod::Supernodal] {
+            let symbolic = LuSymbolic::analyze(CscPattern::new(6, 6, &cp, &ri).unwrap(), method).unwrap();
+            let mut values = values(6, &cp, &ri);
+            values[0] = f64::NAN;
+            let view = CscView::new(6, 6, &cp, &ri, &values).unwrap();
+            assert_eq!(symbolic.factorize(view).unwrap_err(), SparseError::NotFinite);
+        }
+    }
+
+    #[test]
     fn rejects_a_changed_pattern() {
         let (cp, ri) = tridiag(6);
         let symbolic = LuSymbolic::analyze(CscPattern::new(6, 6, &cp, &ri).unwrap(), LuMethod::Simplicial).unwrap();
