@@ -41,14 +41,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown,wasm32-wasip1
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@v2
       - name: Install wasmtime
         run: |
           curl -sSf https://wasmtime.dev/install.sh | bash
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
       - name: Build for wasm32-unknown-unknown
         run: cargo build --lib --target wasm32-unknown-unknown
-      - name: Run the tests on wasm (generic kernel, no SIMD requirement)
+      - name: Run the tests on WASI (generic kernel, no SIMD requirement)
         run: cargo test --lib --target wasm32-wasip1
+      - name: Install the matching wasm-bindgen runner
+        run: |
+          version=$(cargo metadata --format-version 1 --filter-platform wasm32-unknown-unknown \
+            | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')
+          echo "wasm-bindgen ${version}"
+          cargo install wasm-bindgen-cli --version "${version}" --locked
+      - name: Run the browser-target test
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: cargo test --target wasm32-unknown-unknown --test wasm_browser
 
   coverage:
     runs-on: ubuntu-latest

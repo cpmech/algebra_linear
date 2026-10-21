@@ -6,7 +6,11 @@
 //! supernodal analysis are only needed by the supernodal path and are not part
 //! of this module yet.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use std::time::Instant;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::Instant;
 
 use super::csc::CscPattern;
 use super::ordering::colamd::{ColamdControl, colamd_order};
