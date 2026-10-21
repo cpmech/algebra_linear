@@ -90,7 +90,9 @@ fn dense_random_systems_are_solved_accurately() {
             let mut xn = b.clone();
             supernodal.factorize(view).unwrap().solve(&mut xn).unwrap();
 
-            let auto = LuSymbolic::analyze(pattern, LuMethod::auto()).unwrap();
+            // The default threshold (40.0) is tuned for large matrices; use a
+            // low threshold so the dense case exercises the supernodal path.
+            let auto = LuSymbolic::analyze(pattern, LuMethod::Auto { flop_ratio_threshold: 1.0 }).unwrap();
             let mut xa = b.clone();
             auto.factorize(view).unwrap().solve(&mut xa).unwrap();
 

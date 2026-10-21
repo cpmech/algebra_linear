@@ -12,9 +12,14 @@
 //!
 //! The counts are those of the Cholesky factor of `AᵀA`, so `ratio` grows with
 //! the average column density. A supernode is profitable once its columns are
-//! dense, and the default threshold (`4.0`) is well above what a banded or
-//! tridiagonal pattern produces and well below a dense one. It is a heuristic;
-//! the threshold is configurable and benchmarking remains the deciding evidence.
+//! dense, and the default threshold (`40.0`, matching the upstream default of
+//! `1.0 × 40`) is well above what a banded or tridiagonal pattern produces and
+//! below a dense one. It is a heuristic; benchmarking remains the deciding
+//! evidence.
+//!
+//! The supernodal factorization is still experimental: it is slower than the
+//! simplicial path on the matrices benchmarked so far, so
+//! [`LuMethod::Simplicial`] (the [`Default`]) remains the recommended choice.
 
 use crate::sparse::SparseError;
 use crate::sparse::csc::CscPattern;
@@ -40,16 +45,16 @@ pub enum LuMethod {
     Supernodal,
     /// Pick supernodal when the flop proxy exceeds `flop_ratio_threshold`.
     Auto {
-        /// Threshold on `Σ_j col_counts[j]² / nnz(A)`; `4.0` is the default.
+        /// Threshold on `Σ_j col_counts[j]² / nnz(A)`; `40.0` is the default.
         flop_ratio_threshold: f64,
     },
 }
 
 impl LuMethod {
-    /// Returns the automatic method with the default threshold (`4.0`).
+    /// Returns the automatic method with the default threshold (`40.0`).
     #[inline]
     pub fn auto() -> Self {
-        Self::Auto { flop_ratio_threshold: 4.0 }
+        Self::Auto { flop_ratio_threshold: 40.0 }
     }
 }
 
@@ -336,11 +341,14 @@ mod tests {
         let n = solve(LuMethod::auto(), 9, &cp, &ri, &v);
         assert_eq!(n.len(), 9);
 
+        // A low threshold exercises the dense case; the default (40.0) is
+        // tuned for large matrices and keeps a 12x12 pattern simplicial.
         let (cp, ri) = dense(12);
         let v = values(12, &cp, &ri);
-        let symbolic = LuSymbolic::analyze(CscPattern::new(12, 12, &cp, &ri).unwrap(), LuMethod::auto()).unwrap();
+        let method = LuMethod::Auto { flop_ratio_threshold: 1.0 };
+        let symbolic = LuSymbolic::analyze(CscPattern::new(12, 12, &cp, &ri).unwrap(), method).unwrap();
         assert!(symbolic.is_supernodal(), "dense should be supernodal");
-        solve(LuMethod::auto(), 12, &cp, &ri, &v);
+        solve(method, 12, &cp, &ri, &v);
     }
 
     #[test]
