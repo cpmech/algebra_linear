@@ -12,9 +12,14 @@
 //!
 //! The counts are those of the Cholesky factor of `AᵀA`, so `ratio` grows with
 //! the average column density. A supernode is profitable once its columns are
-//! dense, and the default threshold (`4.0`) is well above what a banded or
-//! tridiagonal pattern produces and well below a dense one. It is a heuristic;
-//! the threshold is configurable and benchmarking remains the deciding evidence.
+//! dense, and the default threshold (`40.0`, matching the upstream default of
+//! `1.0 × 40`) is well above what a banded or tridiagonal pattern produces and
+//! below a dense one. It is a heuristic; benchmarking remains the deciding
+//! evidence.
+//!
+//! The supernodal factorization is still experimental: it is slower than the
+//! simplicial path on the matrices benchmarked so far, so
+//! [`LuMethod::Simplicial`] (the [`Default`]) remains the recommended choice.
 
 use crate::sparse::SparseError;
 use crate::sparse::csc::CscPattern;
@@ -22,6 +27,14 @@ use crate::sparse::csc::CscView;
 use crate::sparse::lu::{LuFactors, SparseScalar};
 use crate::sparse::supernodal::{SupernodalLu, SymbolicSupernodal};
 use crate::sparse::symbolic::SymbolicLu;
+
+/// Maximum number of columns a child supernode may have to be merged into its
+/// parent by the relaxation pass.
+const RELAX_MAX_CHILD_SIZE: usize = 4;
+
+/// Maximum ratio of introduced zeros to the expanded diagonal block allowed
+/// when a child is merged into its parent.
+const RELAX_FILL_TOLERANCE: f64 = 0.1;
 
 /// Which factorization the solver should use.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,16 +45,16 @@ pub enum LuMethod {
     Supernodal,
     /// Pick supernodal when the flop proxy exceeds `flop_ratio_threshold`.
     Auto {
-        /// Threshold on `Σ_j col_counts[j]² / nnz(A)`; `4.0` is the default.
+        /// Threshold on `Σ_j col_counts[j]² / nnz(A)`; `40.0` is the default.
         flop_ratio_threshold: f64,
     },
 }
 
 impl LuMethod {
-    /// Returns the automatic method with the default threshold (`4.0`).
+    /// Returns the automatic method with the default threshold (`40.0`).
     #[inline]
     pub fn auto() -> Self {
-        Self::Auto { flop_ratio_threshold: 4.0 }
+        Self::Auto { flop_ratio_threshold: 40.0 }
     }
 }
 
@@ -77,10 +90,27 @@ impl LuSymbolic {
     /// and symbolic errors of the two analyses.
     pub fn analyze(pattern: CscPattern<'_>, method: LuMethod) -> Result<Self, SparseError> {
         let simplicial = SymbolicLu::analyze(pattern)?;
-        let supernodal_symbolic = SymbolicSupernodal::analyze_with_permutation(pattern, simplicial.col_perm(), simplicial.col_perm_inv())?;
-        let counts = supernodal_symbolic.col_counts();
-        let squares: f64 = counts.iter().map(|&c| (c as f64) * (c as f64)).sum();
-        let flop_ratio = if pattern.nnz() == 0 { 0.0 } else { squares / pattern.nnz() as f64 };
+
+        // The supernodal structure is only needed when it may run. Building it
+        // for an explicit simplicial request is pure overhead: the column
+        // counts, the supernode partition and the transposed pattern are all
+        // discarded. `Auto` still needs it to evaluate the flop proxy.
+        let (supernodal_symbolic, flop_ratio) = match method {
+            LuMethod::Simplicial => (None, 0.0),
+            LuMethod::Supernodal | LuMethod::Auto { .. } => {
+                // The fundamental partition leaves mostly one-column
+                // supernodes on the matrices measured so far, so apply the
+                // simplified relaxation: merge a small child into its parent
+                // while the extra zeros stay within the tolerance.
+                let symbolic = SymbolicSupernodal::analyze_with_permutation(pattern, simplicial.col_perm(), simplicial.col_perm_inv())?
+                    .with_relaxation(RELAX_MAX_CHILD_SIZE, RELAX_FILL_TOLERANCE);
+                let counts = symbolic.col_counts();
+                let squares: f64 = counts.iter().map(|&c| (c as f64) * (c as f64)).sum();
+                let ratio = if pattern.nnz() == 0 { 0.0 } else { squares / pattern.nnz() as f64 };
+                (Some(symbolic), ratio)
+            }
+        };
+
         let supernodal = match method {
             LuMethod::Simplicial => false,
             LuMethod::Supernodal => true,
@@ -93,7 +123,7 @@ impl LuSymbolic {
             supernodal,
             flop_ratio,
             simplicial,
-            supernodal_symbolic: supernodal.then_some(supernodal_symbolic),
+            supernodal_symbolic: if supernodal { supernodal_symbolic } else { None },
         })
     }
 
@@ -311,11 +341,14 @@ mod tests {
         let n = solve(LuMethod::auto(), 9, &cp, &ri, &v);
         assert_eq!(n.len(), 9);
 
+        // A low threshold exercises the dense case; the default (40.0) is
+        // tuned for large matrices and keeps a 12x12 pattern simplicial.
         let (cp, ri) = dense(12);
         let v = values(12, &cp, &ri);
-        let symbolic = LuSymbolic::analyze(CscPattern::new(12, 12, &cp, &ri).unwrap(), LuMethod::auto()).unwrap();
+        let method = LuMethod::Auto { flop_ratio_threshold: 1.0 };
+        let symbolic = LuSymbolic::analyze(CscPattern::new(12, 12, &cp, &ri).unwrap(), method).unwrap();
         assert!(symbolic.is_supernodal(), "dense should be supernodal");
-        solve(LuMethod::auto(), 12, &cp, &ri, &v);
+        solve(method, 12, &cp, &ri, &v);
     }
 
     #[test]
