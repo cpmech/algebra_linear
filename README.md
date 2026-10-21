@@ -1,4 +1,4 @@
-# algebra_linear -- Pure-Rust BLAS, LAPACK, and sparse LU
+# algebra_linear - Pure-Rust BLAS, LAPACK, and sparse LU
 
 <p align="left">
   <img src="docs/web-assembly-logo.png" width="96" alt="WebAssembly logo"><br>
@@ -13,8 +13,8 @@ target, including `wasm32-unknown-unknown`.
 | module | contents |
 |---|---|
 | `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, `dtrsv` (+transpose), `dtrsm`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `ztrsv` (+transpose), `ztrsm`, `dznrm2` |
-| `sparse` | a simplicial sparse LU (`CscView`, `SymbolicLu`, `LuFactors`) and a supernodal one (`SymbolicSupernodal`, `SupernodalLu`) in CSC form, with real and complex scalars, plus the ported COLAMD ordering; `LuSymbolic`/`LuMethod` choose between the methods |
 | `lapack` | drivers: `dgesv`, `dgetrf`, `dgetrf_rect` (the `nrows x ncols` panel), `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetrf_rect`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
+| `sparse` | a simplicial* sparse LU (`CscView`, `SymbolicLu`, `LuFactors`) and a supernodal* one (`SymbolicSupernodal`, `SupernodalLu`) in CSC form, with real and complex scalars, plus the ported COLAMD ordering; `LuSymbolic`/`LuMethod` choose between the methods [*ported from faer](https://codeberg.org/sarah-quinones/faer) |
 
 Not every BLAS or LAPACK routine is here: the port covers the drivers a dense
 linear-algebra caller needs, plus a sparse LU with a COLAMD ordering. Each function names the reference source it follows (for example
@@ -56,8 +56,4 @@ put a developer's directory layout into released source.
 
 ## License
 
-BSD 3-Clause. The kernels are a transcription of LAPACK 3.12.1 and its reference
-BLAS, whose copyright notice and conditions are reproduced verbatim in
-[`LICENSE`](LICENSE) and apply to the derived code; the Rust transcription is
-copyright Dorival Pedroso. If you redistribute a binary that statically links this
-crate, that notice must travel with it (BSD 3-Clause, clause 2).
+BSD 3-Clause. The dense kernels are based on LAPACK 3.12.1 and BLAS. Their licenses are in the [`LICENSE`](LICENSE) file. The sparse LU and its COLAMD ordering are based on [faer](https://codeberg.org/sarah-quinones/faer) (MIT) and SuiteSparse COLAMD (BSD 3-Clause). Their notices are also in the license file. The Rust code is by Dorival Pedroso. If you share a binary that statically links this crate, you must include the [`LICENSE`](LICENSE) file (BSD 3-Clause, clause 2).
