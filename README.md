@@ -1,5 +1,10 @@
 # algebra_linear -- Pure-Rust BLAS, LAPACK, and sparse LU
 
+<p align="left">
+  <img src="docs/web-assembly-logo.png" width="96" alt="WebAssembly logo"><br>
+  <sub>Compiles for <code>wasm32-unknown-unknown</code> and <code>wasm32-wasip1</code></sub>
+</p>
+
 No external library, no C in a normal build, nothing to link — it compiles for any
 target, including `wasm32-unknown-unknown`.
 
