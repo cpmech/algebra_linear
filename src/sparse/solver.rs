@@ -23,6 +23,14 @@ use crate::sparse::lu::{LuFactors, SparseScalar};
 use crate::sparse::supernodal::{SupernodalLu, SymbolicSupernodal};
 use crate::sparse::symbolic::SymbolicLu;
 
+/// Maximum number of columns a child supernode may have to be merged into its
+/// parent by the relaxation pass.
+const RELAX_MAX_CHILD_SIZE: usize = 4;
+
+/// Maximum ratio of introduced zeros to the expanded diagonal block allowed
+/// when a child is merged into its parent.
+const RELAX_FILL_TOLERANCE: f64 = 0.1;
+
 /// Which factorization the solver should use.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LuMethod {
@@ -77,10 +85,27 @@ impl LuSymbolic {
     /// and symbolic errors of the two analyses.
     pub fn analyze(pattern: CscPattern<'_>, method: LuMethod) -> Result<Self, SparseError> {
         let simplicial = SymbolicLu::analyze(pattern)?;
-        let supernodal_symbolic = SymbolicSupernodal::analyze_with_permutation(pattern, simplicial.col_perm(), simplicial.col_perm_inv())?;
-        let counts = supernodal_symbolic.col_counts();
-        let squares: f64 = counts.iter().map(|&c| (c as f64) * (c as f64)).sum();
-        let flop_ratio = if pattern.nnz() == 0 { 0.0 } else { squares / pattern.nnz() as f64 };
+
+        // The supernodal structure is only needed when it may run. Building it
+        // for an explicit simplicial request is pure overhead: the column
+        // counts, the supernode partition and the transposed pattern are all
+        // discarded. `Auto` still needs it to evaluate the flop proxy.
+        let (supernodal_symbolic, flop_ratio) = match method {
+            LuMethod::Simplicial => (None, 0.0),
+            LuMethod::Supernodal | LuMethod::Auto { .. } => {
+                // The fundamental partition leaves mostly one-column
+                // supernodes on the matrices measured so far, so apply the
+                // simplified relaxation: merge a small child into its parent
+                // while the extra zeros stay within the tolerance.
+                let symbolic = SymbolicSupernodal::analyze_with_permutation(pattern, simplicial.col_perm(), simplicial.col_perm_inv())?
+                    .with_relaxation(RELAX_MAX_CHILD_SIZE, RELAX_FILL_TOLERANCE);
+                let counts = symbolic.col_counts();
+                let squares: f64 = counts.iter().map(|&c| (c as f64) * (c as f64)).sum();
+                let ratio = if pattern.nnz() == 0 { 0.0 } else { squares / pattern.nnz() as f64 };
+                (Some(symbolic), ratio)
+            }
+        };
+
         let supernodal = match method {
             LuMethod::Simplicial => false,
             LuMethod::Supernodal => true,
@@ -93,7 +118,7 @@ impl LuSymbolic {
             supernodal,
             flop_ratio,
             simplicial,
-            supernodal_symbolic: supernodal.then_some(supernodal_symbolic),
+            supernodal_symbolic: if supernodal { supernodal_symbolic } else { None },
         })
     }
 

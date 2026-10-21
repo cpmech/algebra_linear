@@ -395,22 +395,33 @@ impl SymbolicSupernodal {
                 }
             }
 
-            // Store the L columns and the U panels.
+            // Store the L columns and the U panels. Exact zeros are skipped:
+            // the front is dense in the row union `r_rows`, but many of those
+            // entries never become nonzero, and carrying them would make every
+            // later update walk them.
             for (jj, j) in (s_begin..s_end).enumerate() {
                 for li in jj..nrows {
                     let row = r_rows[li];
                     let val = if li == jj { T::one() } else { front[li + jj * nrows] };
-                    l_cols[j].push((row, val));
+                    if li == jj || val.abs() != 0.0 {
+                        l_cols[j].push((row, val));
+                    }
                 }
             }
             for (jj, j) in (s_begin..s_end).enumerate() {
                 for ii in 0..=jj {
-                    u_cols[j].push((s_begin + ii, front[ii + jj * nrows]));
+                    let val = front[ii + jj * nrows];
+                    if ii == jj || val.abs() != 0.0 {
+                        u_cols[j].push((s_begin + ii, val));
+                    }
                 }
             }
             for (ci, &c) in c_cols.iter().enumerate() {
                 for ii in 0..s_size {
-                    u_cols[c].push((s_begin + ii, u_front[ii + ci * nrows]));
+                    let val = u_front[ii + ci * nrows];
+                    if val.abs() != 0.0 {
+                        u_cols[c].push((s_begin + ii, val));
+                    }
                 }
                 let node = supernode_of(ptr, c);
                 if node > s && u_compress_cols[node].last() != Some(&s) {
