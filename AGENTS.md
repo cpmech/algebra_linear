@@ -194,7 +194,8 @@ this one. `dgesvd` remains unblocked. The rules of thumb:
 
 ## Coverage: deliberately uncovered lines
 
-The gate is `cargo llvm-cov --lib --lcov` followed by `zscripts/check-coverage.bash`;
+The gate is the `cpmech/rust-cov` composite action (`cargo llvm-cov --lib --lcov` plus its
+line-counting check), so the script lives in that action rather than here:
 CI runs both in its `coverage` job. It counts each source line once — the `DA:`
 records — because `--fail-under-lines` counts a line per monomorphization and would
 report dimension-dispatching code as partly uncovered.
