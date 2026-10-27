@@ -1,0 +1,115 @@
+use crate::sparse::amgcl::{Amg, AmgParams, ChebyshevParams, CsrMatrix, Error, Gmres, Ilu0Params, Smoother, SolverParams};
+
+fn relative_residual(a: &CsrMatrix, b: &[f64], x: &[f64]) -> f64 {
+    let mut r = vec![0.0; b.len()];
+    a.residual(b, x, &mut r).unwrap();
+    r.iter().map(|v| v * v).sum::<f64>().sqrt() / b.iter().map(|v| v * v).sum::<f64>().sqrt()
+}
+
+#[test]
+fn all_serial_smoothers_converge_in_amg_gmres() {
+    let smoothers = [
+        Smoother::Ilu0(Ilu0Params { damping: 0.9 }),
+        Smoother::Chebyshev(ChebyshevParams::default()),
+        Smoother::Chebyshev(ChebyshevParams {
+            degree: 4,
+            scale: true,
+            power_iterations: 12,
+            ..ChebyshevParams::default()
+        }),
+        Smoother::Spai0,
+        Smoother::Spai1,
+    ];
+    let a = CsrMatrix::poisson_2d(16, 16).unwrap();
+    let b: Vec<f64> = (0..a.nrows()).map(|i| 1.0 + (i % 5) as f64 / 10.0).collect();
+
+    for smoother in smoothers {
+        let mut amg = Amg::new(
+            &a,
+            AmgParams {
+                smoother,
+                ..AmgParams::default()
+            },
+        )
+        .unwrap();
+        let mut x = vec![0.0; a.nrows()];
+        let report = Gmres::new(
+            SolverParams {
+                tolerance: 1e-9,
+                max_iterations: 100,
+                ..SolverParams::default()
+            },
+            30,
+        )
+        .unwrap()
+        .solve(&a, &mut amg, &b, &mut x)
+        .unwrap();
+        assert!(report.converged, "{smoother:?}: {report:?}");
+        assert!(relative_residual(&a, &b, &x) < 1.1e-9, "{smoother:?}: {report:?}");
+    }
+}
+
+#[test]
+fn ilu0_setup_canonicalizes_unsorted_duplicate_entries() {
+    let a = CsrMatrix::from_parts(
+        2,
+        2,
+        vec![0, 4, 8],
+        vec![1, 0, 0, 1, 1, 0, 1, 0],
+        vec![-0.5, 1.0, 1.0, -0.5, 1.0, -0.5, 1.0, -0.5],
+    )
+    .unwrap();
+    let b = vec![1.0, 2.0];
+    let mut x = vec![0.0; 2];
+    let mut amg = Amg::new(
+        &a,
+        AmgParams {
+            smoother: Smoother::Ilu0(Ilu0Params::default()),
+            max_levels: 1,
+            direct_coarse: false,
+            ..AmgParams::default()
+        },
+    )
+    .unwrap();
+    amg.apply(&b, &mut x).unwrap();
+    assert!(relative_residual(&a, &b, &x) < 1e-13, "{x:?}");
+}
+
+#[test]
+fn relaxation_parameters_and_singular_patterns_are_checked() {
+    let a = CsrMatrix::poisson_2d(4, 4).unwrap();
+    for smoother in [
+        Smoother::Ilu0(Ilu0Params { damping: 0.0 }),
+        Smoother::Chebyshev(ChebyshevParams {
+            degree: 0,
+            ..ChebyshevParams::default()
+        }),
+        Smoother::Chebyshev(ChebyshevParams {
+            lower: 0.0,
+            ..ChebyshevParams::default()
+        }),
+    ] {
+        assert!(matches!(
+            Amg::new(
+                &a,
+                AmgParams {
+                    smoother,
+                    ..AmgParams::default()
+                }
+            ),
+            Err(Error::InvalidParameter(_))
+        ));
+    }
+
+    let missing_diagonal = CsrMatrix::from_triplets(2, 2, [(0, 1, 1.0), (1, 0, 1.0)]).unwrap();
+    let result = Amg::new(
+        &missing_diagonal,
+        AmgParams {
+            smoother: Smoother::Ilu0(Ilu0Params::default()),
+            max_levels: 1,
+            direct_coarse: false,
+            ..AmgParams::default()
+        },
+    );
+    assert!(matches!(result, Err(Error::InvalidMatrix(_))));
+}

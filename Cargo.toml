@@ -1,15 +1,15 @@
 [package]
 name = "algebra_linear"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2024"
 license = "BSD-3-Clause"
-description = "Pure-Rust BLAS, LAPACK, and sparse LU"
+description = "Pure-Rust BLAS, LAPACK, sparse LU, AMG, and Krylov solvers"
 homepage = "https://github.com/cpmech/algebra_linear"
 repository = "https://github.com/cpmech/algebra_linear"
 documentation = "https://docs.rs/algebra_linear"
 readme = "README.md"
 categories = ["mathematics", "science"]
-keywords = ["blas", "lapack", "linear-algebra", "matrix"]
+keywords = ["blas", "lapack", "linear-algebra", "matrix", "amg"]
 # Process files stay out of the published crate: code, README, LICENSE and the
 # reference harness are what a user needs.
 exclude = ["AGENTS.md", ".github/", ".gitignore", "rustfmt.toml", "zscripts/"]
@@ -44,6 +44,7 @@ identity_op = "allow"            # allow "i + 0" for uniform unrolled loops
 let_unit_value = "allow"         # allow "let _ = CONST;" to force const evaluation
 manual_is_multiple_of = "allow"  # allow "n % k == 0" instead of is_multiple_of()
 manual_range_contains = "allow"  # allow if "a < b && c < d" constructions
+needless_late_init = "allow"     # preserve declaration order in literal LAPACK transcriptions
 needless_range_loop = "allow"    # allow "for i in a..b" instead of range
 new_without_default = "allow"    # The user is encouraged to call new()
 too_many_arguments = "allow"     # allow functions with many parameters

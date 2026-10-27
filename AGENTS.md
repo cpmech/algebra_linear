@@ -4,9 +4,10 @@ Notes for automated agents and contributors working in this repository.
 
 ## What this crate is
 
-A pure-Rust implementation of BLAS and LAPACK. It must build for any target,
-including `wasm32-unknown-unknown`, and the default build compiles no C and links
-no library. External libraries appear only in the development-only reference
+A pure-Rust implementation of BLAS, LAPACK, sparse direct solvers, and core CPU
+AMG/Krylov solvers. It must build for any target, including
+`wasm32-unknown-unknown`, and the default build compiles no C and links no
+library. External libraries appear only in the development-only reference
 harness described below.
 
 ## Hard constraints
@@ -15,7 +16,9 @@ harness described below.
   import, or otherwise reference a project that depends on this crate — not in code,
   not in docs, not in tests, not in CI. The dependency goes one way only. When a
   comment needs to explain a call site, say *the caller*.
-- **Everything is column-major**, indexing `data[i + j * nrow]`.
+- **Dense matrices are column-major**, indexing `data[i + j * nrow]`. Sparse
+  formats are solver-specific: sparse LU accepts CSC and AMGCL accepts CSR. Do
+  not add implicit CSC/CSR conversion; callers provide the required format.
 - **Never use `LAPACKE_*`** — it is the row-major API and silently transposes every
   matrix. `lapack.h` binds directly to the Fortran routines and is correctly
   column-major. This applies to the reference harness too.

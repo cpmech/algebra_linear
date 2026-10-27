@@ -1,4 +1,4 @@
-# algebra_linear - Pure-Rust BLAS, LAPACK, and sparse LU
+# algebra_linear - Pure-Rust BLAS, LAPACK, sparse LU, and AMG
 
 <p align="left">
   <img src="docs/web-assembly-logo.png" width="96" alt="WebAssembly logo"><br>
@@ -15,9 +15,11 @@ target, including `wasm32-unknown-unknown`.
 | `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, `dtrsv` (+transpose), `dtrsm`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `ztrsv` (+transpose), `ztrsm`, `dznrm2` |
 | `lapack` | drivers: `dgesv`, `dgetrf`, `dgetrf_rect` (the `nrows x ncols` panel), `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetrf_rect`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
 | `sparse` | a simplicial* sparse LU (`CscView`, `SymbolicLu`, `LuFactors`) and a supernodal* one (`SymbolicSupernodal`, `SupernodalLu`) in CSC form, with real and complex scalars, plus the ported COLAMD ordering; `LuSymbolic`/`LuMethod` choose between the methods [*ported from faer -- see also reference #1](https://codeberg.org/sarah-quinones/faer) |
+| `sparse::amgcl` | real `f64` CSR matrices, classical Ruge–Stüben and aggregation-based AMG, Gauss–Seidel, damped Jacobi, ILU(0), Chebyshev, SPAI(0/1), AMG-preconditioned CG, BiCGStab, restarted GMRES, and optional native scoped-thread parallelism |
 
 Not every BLAS or LAPACK routine is here: the port covers the drivers a dense
-linear-algebra caller needs, plus a sparse LU with a COLAMD ordering. Each function names the reference source it follows (for example
+linear-algebra caller needs, sparse LU with a COLAMD ordering, and the core CPU
+AMGCL algorithms. Each function names the reference source it follows (for example
 "transcription of `dsytrd`/`dlatrd`") so it can be checked against LAPACK 3.12.1.
 
 ## Conventions
@@ -27,10 +29,59 @@ linear-algebra caller needs, plus a sparse LU with a COLAMD ordering. Each funct
   from.
 - **No workspace arguments.** The workspace a Fortran routine asks the caller for is
   allocated internally here.
+- **Solver-specific sparse formats.** Sparse LU callers provide CSC; AMGCL callers
+  provide CSR. The crate does not convert between CSC and CSR.
 - Functions return `Result<(), LapackError>` rather than LAPACK's `INFO`, with
   `INFO < 0` mapped to `BadShape` and `INFO > 0` to `Singular` or `Convergence`.
 - An AVX2+FMA micro-kernel is selected at run time on x86-64; every other target
   (including `wasm32`) takes the portable blocked kernel.
+
+## AMG and Krylov solvers
+
+The `sparse::amgcl` module accepts user-supplied CSR matrices directly. This
+example builds a two-dimensional Poisson matrix and solves it with
+AMG-preconditioned CG:
+
+```rust
+use algebra_linear::sparse::amgcl::{Amg, AmgParams, Cg, CsrMatrix, SolverParams};
+
+fn main() -> Result<(), algebra_linear::sparse::amgcl::Error> {
+    let a = CsrMatrix::poisson_2d(32, 32)?;
+    let b = vec![1.0; a.nrows()];
+    let mut x = vec![0.0; a.nrows()];
+    let mut amg = Amg::new(&a, AmgParams::default())?;
+    let cg = Cg::new(SolverParams {
+        tolerance: 1e-10,
+        max_iterations: 100,
+        ..SolverParams::default()
+    });
+    let report = cg.solve(&a, &mut amg, &b, &mut x)?;
+    assert!(report.converged);
+    println!("{} iterations", report.iterations);
+    Ok(())
+}
+```
+
+Execution is serial by default. On native targets, set `Parallelism` independently
+in `AmgParams` and `SolverParams` to enable standard-library scoped threads. There
+is no persistent worker pool or external runtime. WebAssembly always uses the
+serial path. Gauss–Seidel, ILU(0) factorization and triangular solves, dense
+coarse LU, and sequential coarsening steps remain serial.
+
+Run the examples with:
+
+```bash
+cargo run --release --example amgcl_poisson -- 32
+cargo run --release --example amgcl_aggregation
+cargo run --release --example amgcl_smoothers
+cargo run --release --example amgcl_nonsymmetric
+cargo run --release --example amgcl_parallel -- 4
+```
+
+The module is a scoped core-CPU port, not complete feature-for-feature AMGCL
+parity. MPI, GPU backends, block and complex values, user-supplied near-nullspace
+vectors, and upstream C++ API compatibility are outside its scope. See
+[`AMGCL_PORTING.md`](AMGCL_PORTING.md) for the source map and numerical notes.
 
 ## Performance
 
@@ -80,7 +131,7 @@ put a developer's directory layout into released source.
 
 ## License
 
-BSD 3-Clause. The dense kernels are based on LAPACK 3.12.1 and BLAS. Their licenses are in the [`LICENSE`](LICENSE) file. The sparse LU and its COLAMD ordering are based on [faer](https://codeberg.org/sarah-quinones/faer) (MIT) and SuiteSparse COLAMD (BSD 3-Clause). Their notices are also in the license file. The Rust code is by Dorival Pedroso. If you share a binary that statically links this crate, you must include the [`LICENSE`](LICENSE) file (BSD 3-Clause, clause 2).
+BSD 3-Clause. The dense kernels are based on LAPACK 3.12.1 and BLAS. Their licenses are in the [`LICENSE`](LICENSE) file. The sparse LU and its COLAMD ordering are based on [faer](https://codeberg.org/sarah-quinones/faer) (MIT) and SuiteSparse COLAMD (BSD 3-Clause). The `sparse::amgcl` module follows [AMGCL](https://github.com/ddemidov/amgcl) (MIT). Their notices are also in the license file. The Rust code is by Dorival Pedroso. If you share a binary that statically links this crate, you must include the [`LICENSE`](LICENSE) file (BSD 3-Clause, clause 2).
 
 ## References
 
