@@ -14,8 +14,11 @@ target, including `wasm32-unknown-unknown`.
 |---|---|
 | `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, `dtrsv` (+transpose), `dtrsm`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `ztrsv` (+transpose), `ztrsm`, `dznrm2` |
 | `lapack` | drivers: `dgesv`, `dgetrf`, `dgetrf_rect` (the `nrows x ncols` panel), `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetrf_rect`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
-| `sparse` | `SparseLu`, an opaque sparse LU over caller-owned CSC arrays, with `LuMethod` choosing the simplicial or supernodal factorization, `SparseLuStats` reporting structure, cost and timing, real (`f64`) and complex (`Complex64`) scalars, and the ported COLAMD ordering [*ported from faer -- see also reference #1](https://codeberg.org/sarah-quinones/faer) |
+| `sparse` | `SparseLu`, an opaque sparse LU over caller-owned CSC arrays, with `LuMethod` choosing the simplicial or supernodal factorization, one analysis reused across value updates, `SparseLuStats` reporting structure, cost and timing, real (`f64`) and complex (`Complex64`) scalars, and the COLAMD ordering |
 | `sparse::amgcl` | array-based entry points `amg_setup(row_ptr, col_idx, values, params)` and `krylov_solve(method, &mut amg, rhs, x, params)` for real `f64` CSR arrays, classical Ruge–Stüben and aggregation-based AMG, Gauss–Seidel, damped Jacobi, ILU(0), Chebyshev, SPAI(0/1), AMG-preconditioned CG, BiCGStab, restarted GMRES, and optional native scoped-thread parallelism |
+
+- `sparse` (the sparse LU and its COLAMD ordering) is ported from [faer](https://codeberg.org/sarah-quinones/faer) (MIT License)
+- `sparse::amgcl` is ported from [AMGCL](https://github.com/ddemidov/amgcl) (MIT License)
 
 Not every BLAS or LAPACK routine is here: the port covers the drivers a dense
 linear-algebra caller needs, sparse LU with a COLAMD ordering, and the core CPU
@@ -31,16 +34,53 @@ AMGCL algorithms. Each function names the reference source it follows (for examp
   allocated internally here.
 - **Solver-specific sparse formats.** Sparse LU callers provide CSC; AMGCL callers
   provide CSR. The crate does not convert between CSC and CSR.
-- Functions return `Result<(), LapackError>` rather than LAPACK's `INFO`, with
-  `INFO < 0` mapped to `BadShape` and `INFO > 0` to `Singular` or `Convergence`.
+- **Dense drivers** return `Result<(), LapackError>` rather than LAPACK's `INFO`, with
+  `INFO < 0` mapped to `BadShape` and `INFO > 0` to `Singular` or `Convergence`. The sparse
+  routines return `SparseError`; the iterative ones return `amgcl::Error`.
 - An AVX2+FMA micro-kernel is selected at run time on x86-64; every other target
   (including `wasm32`) takes the portable blocked kernel.
+
+## Sparse LU
+
+`SparseLu` analyzes a compressed sparse column (CSC) pattern once and factorizes
+new values on it; `LuMethod` chooses the simplicial or supernodal factorization,
+and `stats()` reports fill, flop estimate and timings after a factorization.
+
+```rust
+use algebra_linear::sparse::{LuMethod, SparseLu};
+
+fn main() -> Result<(), algebra_linear::sparse::SparseError> {
+    // A = [4 1; 1 3] in CSC form.
+    let col_ptr = [0, 2, 4];
+    let row_idx = [0, 1, 0, 1];
+    let values = [4.0, 1.0, 1.0, 3.0];
+
+    let mut lu = SparseLu::analyze(&col_ptr, &row_idx, LuMethod::auto())?;
+    lu.factorize(&col_ptr, &row_idx, &values)?;
+
+    let mut b = [1.0, 2.0];
+    lu.solve(&mut b)?;
+    assert!((b[0] - 1.0 / 11.0).abs() < 1e-14);
+    assert!((b[1] - 7.0 / 11.0).abs() < 1e-14);
+
+    // The same pattern with new values reuses the analysis.
+    let new_values = [5.0, 2.0, 2.0, 2.0];
+    lu.factorize(&col_ptr, &row_idx, &new_values)?;
+    let mut b = [1.0, 1.0];
+    lu.solve(&mut b)?;
+    assert!((b[1] - 0.5).abs() < 1e-14);
+    assert!(lu.stats().unwrap().fill_ratio > 0.0);
+    Ok(())
+}
+```
 
 ## AMG and Krylov solvers
 
 The `sparse::amgcl` module accepts raw compressed sparse row (CSR) arrays. This
 example builds the one-dimensional Laplacian `tridiag(-1, 4, -1)` on three
-unknowns and solves it with AMG-preconditioned CG:
+unknowns and solves it with CG. At that size the hierarchy is a single level that
+the coarse solve handles, so the multigrid path appears in the examples below
+rather than here:
 
 ```rust
 use algebra_linear::sparse::amgcl::{AmgParams, KrylovMethod, SolverParams, amg_setup, krylov_solve};
@@ -93,7 +133,7 @@ vectors, and upstream C++ API compatibility are outside its scope. See
 
 ## Performance
 
-The `Native` solver of [`russell_sparse`](https://crates.io/crates/russell_sparse) 4.x uses the sparse LU from this crate. The table below compares it with UMFPACK on the benchmark matrices that completed; the data is from [benchmark-russell](https://github.com/cpmech/benchmark-russell). `russell_sparse` 5.0 renames that same solver `Direct`.
+The `Native` solver of [`russell_sparse`](https://crates.io/crates/russell_sparse) 4.x uses the sparse LU from this crate. The table below compares it with UMFPACK on the benchmark matrices that completed; the data is from [benchmark-russell](https://github.com/cpmech/benchmark-russell).
 
 | Matrix | NROW | NNZ | Native | UMFPACK | UMFPACK / Native |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -140,7 +180,3 @@ put a developer's directory layout into released source.
 ## License
 
 BSD 3-Clause. The dense kernels are based on LAPACK 3.12.1 and BLAS. Their licenses are in the [`LICENSE`](LICENSE) file. The sparse LU and its COLAMD ordering are based on [faer](https://codeberg.org/sarah-quinones/faer) (MIT) and SuiteSparse COLAMD (BSD 3-Clause). The `sparse::amgcl` module follows [AMGCL](https://github.com/ddemidov/amgcl) (MIT). Their notices are also in the license file. The Rust code is by Dorival Pedroso. If you share a binary that statically links this crate, you must include the [`LICENSE`](LICENSE) file (BSD 3-Clause, clause 2).
-
-## References
-
-1. Kazdadi, S. Q. E., (2026). faer: A linear algebra library for the Rust programming language. Journal of Open Source Software, 11(123), 6099, https://doi.org/10.21105/joss.06099

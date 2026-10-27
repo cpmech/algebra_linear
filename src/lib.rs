@@ -50,3 +50,8 @@ macro_rules! cpx {
         $crate::Complex64::new($real, $imag)
     };
 }
+
+// run the code blocks in README.md as doctests
+#[doc = include_str!("../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDoctest;
