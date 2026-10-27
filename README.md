@@ -133,9 +133,12 @@ vectors, and upstream C++ API compatibility are outside its scope. See
 
 ## Performance
 
-The `Native` solver of [`russell_sparse`](https://crates.io/crates/russell_sparse) 4.x uses the sparse LU from this crate. The table below compares it with UMFPACK on the benchmark matrices that completed; the data is from [benchmark-russell](https://github.com/cpmech/benchmark-russell).
+The direct solver of [`russell_sparse`](https://crates.io/crates/russell_sparse) — `Genie::Direct`
+from 5.0, `Native` in 4.x, which is where these numbers come from — is the sparse LU in this crate.
+The table below compares it with UMFPACK on the benchmark matrices that completed; the data is from
+[benchmark-russell](https://github.com/cpmech/benchmark-russell).
 
-| Matrix | NROW | NNZ | Native | UMFPACK | UMFPACK / Native |
+| Matrix | NROW | NNZ | Direct | UMFPACK | UMFPACK / Direct |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | bwm2000 | 2,000 | 7,996 | 1.11 ms | 0.750 ms | 1.47× faster |
 | mhd1280b (c) | 1,280 | 22,778 | 0.717 ms | 0.383 ms | 1.87× faster |
@@ -147,13 +150,13 @@ The `Native` solver of [`russell_sparse`](https://crates.io/crates/russell_spars
 
 `(c)` marks a complex-valued matrix; rows are sorted by NNZ. **NNZ is the matrix-file non-zero count.** Times are five-run averages from the benchmark on the benchmark machine (Arch Linux, Intel Core i9-13900KF).
 
-That 4.x `Native` solver is fast on small systems: up to about 30,000 non-zeros it takes at most a few tens of milliseconds. It becomes very slow for matrices with more than **1 million** non-zeros: the `xenon1` case (NROW=48,600, 1,181,120 non-zeros) takes **55 s**, and the next real case (`twotone`, NROW=120,750, 1,224,224 non-zeros) did not finish within the 3-minute probe. For matrices with more than **1 million** non-zeros, expect **nearly a minute** or more.
+That direct solver is fast on small systems: up to about 30,000 non-zeros it takes at most a few tens of milliseconds. It becomes very slow for matrices with more than **1 million** non-zeros: the `xenon1` case (NROW=48,600, 1,181,120 non-zeros) takes **55 s**, and the next real case (`twotone`, NROW=120,750, 1,224,224 non-zeros) did not finish within the 3-minute probe. For matrices with more than **1 million** non-zeros, expect **nearly a minute** or more.
 
 The threshold is not a function of NNZ alone. The complex `mplate` (NROW=5,962, 142,190 non-zeros) takes **3.13 s**, and `RFdevice` (NROW=74,104, 365,580 non-zeros) did not finish in **15 minutes**; sparsity structure and numerical type matter as much as the non-zero count.
 
-UMFPACK is faster than the Native solver on every matrix in the table; the gap grows with the fill-in, reaching **92×** on `xenon1`. The figure below shows the same ratios on a log scale (the dashed line is 1×):
+UMFPACK is faster than the direct solver on every matrix in the table; the gap grows with the fill-in, reaching **92×** on `xenon1`. The figure below shows the same ratios on a log scale (the dashed line is 1×):
 
-![UMFPACK speed-up over the Native solver](docs/plot_speedup_umfpack.png)
+![UMFPACK speed-up over the direct solver](docs/plot_speedup_umfpack.png)
 
 ## Tests
 
