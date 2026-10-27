@@ -1,19 +1,20 @@
-algebra_linear — pure-Rust BLAS, LAPACK, and sparse LU
+algebra_linear — pure-Rust BLAS, LAPACK, sparse LU, and AMG/Krylov solvers
 
 Copyright (c) 2026 Dorival Pedroso (the Rust transcription)
 
-This crate is released under the BSD 3-Clause licence. Its dense kernels are a
+This crate is released under the BSD 3-Clause license. Its dense kernels are a
 transcription of LAPACK 3.12.1 and its reference BLAS, whose copyright notice and
-licence conditions are the text below: it is reproduced verbatim, and it covers
+license conditions are the text below: it is reproduced verbatim, and it covers
 the derived code in this crate. The sparse LU and its COLAMD ordering are a
 translation of faer (MIT), whose notice — together with the SuiteSparse COLAMD
-(BSD 3-Clause) notice — follows the LAPACK one. The crate stays BSD-3-Clause;
-every derived notice is reproduced below.
+(BSD 3-Clause) notice — follows the LAPACK one. The AMGCL module follows the
+MIT-licensed AMGCL project; its notice is also reproduced below. The crate stays
+BSD-3-Clause; every derived notice is reproduced below.
 
 LAPACK: https://www.netlib.org/lapack/ — version 3.12.1.
 
 ================================================================================
-LAPACK 3.12.1 — copyright notice and licence (BSD 3-Clause, verbatim)
+LAPACK 3.12.1 — copyright notice and license (BSD 3-Clause, verbatim)
 ================================================================================
 
 Copyright (c) 1992-2023 The University of Tennessee and The University
@@ -133,3 +134,33 @@ COLAMD License: BSD 3-clause
     LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
     OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
     DAMAGE.
+
+================================================================================
+AMGCL — core CPU AMG and Krylov module (MIT)
+================================================================================
+
+The implementation in `src/sparse/amgcl/` follows AMGCL
+(https://github.com/ddemidov/amgcl), reference revision
+1fbc24e687b404962c31bc4db598f6c73c0f4333.
+
+MIT License
+
+Copyright (c) 2012-2022 Denis Demidov <dennis.demidov@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

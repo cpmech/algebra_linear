@@ -1,10 +1,12 @@
-//! Sparse direct solvers.
+//! Sparse direct and iterative solvers.
 //!
 //! The module provides a simplicial sparse LU factorization in compressed sparse
 //! column (CSC) form, a supernodal one, and the COLAMD column ordering they use
 //! to reduce fill. The supernodal path is usable directly (`SymbolicSupernodal`,
 //! `SupernodalLu`) or through `LuSymbolic`/`LuMethod`, which chooses between the
-//! two with a flop proxy (or a forced method).
+//! two with a flop proxy (or a forced method). The [`amgcl`] submodule provides
+//! algebraic multigrid and preconditioned Krylov solvers for compressed sparse
+//! row (CSR) matrices.
 //!
 //! # Provenance
 //!
@@ -17,12 +19,17 @@
 //! * the column elimination tree and postorder helpers from
 //!   `faer/src/sparse/linalg/qr.rs` and `.../cholesky.rs`.
 //!
+//! The [`amgcl`] submodule follows AMGCL revision
+//! `1fbc24e687b404962c31bc4db598f6c73c0f4333` (MIT).
+//!
 //! See `LICENSE` for the notices.
 //!
 //! # Conventions
 //!
-//! The crate's conventions hold here as well: column-major storage, 0-based
-//! `usize` indices, no workspace arguments, and errors instead of `INFO`.
+//! The crate's conventions hold here as well: column-major dense storage,
+//! 0-based `usize` indices, no workspace arguments, and errors instead of
+//! `INFO`. Sparse inputs are not converted between formats: sparse LU callers
+//! provide CSC, while AMGCL callers provide CSR as required by the solver.
 //!
 //! # Example
 //!
@@ -44,6 +51,7 @@
 //! assert!((b[1] - 7.0 / 11.0).abs() < 1e-14);
 //! ```
 
+pub mod amgcl;
 pub mod csc;
 mod etree;
 pub mod lu;

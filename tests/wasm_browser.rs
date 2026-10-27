@@ -5,6 +5,7 @@
 //! `wasm32-unknown-unknown`.
 #![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 
+use algebra_linear::sparse::amgcl::{Amg, AmgParams, Cg, CsrMatrix, Parallelism, SolverParams};
 use algebra_linear::sparse::{CscPattern, CscView, SymbolicLu};
 use wasm_bindgen_test::*;
 
@@ -22,4 +23,32 @@ fn sparse_lu_runs_in_the_browser_target() {
     lu.solve(&mut x).unwrap();
     assert!((x[0] - 1.0 / 11.0).abs() < 1e-14);
     assert!((x[1] - 7.0 / 11.0).abs() < 1e-14);
+}
+
+#[wasm_bindgen_test]
+fn amgcl_uses_the_serial_browser_path() {
+    let a = CsrMatrix::poisson_2d(4, 4).unwrap();
+    let b = vec![1.0; a.nrows()];
+    let mut x = vec![0.0; a.nrows()];
+    let parallelism = Parallelism {
+        threads: 4,
+        min_parallel_len: 1,
+    };
+    let mut amg = Amg::new(
+        &a,
+        AmgParams {
+            parallelism,
+            ..AmgParams::default()
+        },
+    )
+    .unwrap();
+    let cg = Cg::new(SolverParams {
+        tolerance: 1e-10,
+        max_iterations: 50,
+        parallelism,
+        ..SolverParams::default()
+    });
+    let report = cg.solve(&a, &mut amg, &b, &mut x).unwrap();
+    assert!(report.converged);
+    assert!(x.iter().all(|value| value.is_finite()));
 }

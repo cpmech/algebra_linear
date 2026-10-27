@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Pure-Rust BLAS and LAPACK.
+//! Pure-Rust BLAS, LAPACK, sparse direct solvers, and AMG/Krylov solvers.
 //!
 //! # Layout and conventions
 //!

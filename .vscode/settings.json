@@ -1,0 +1,24 @@
+{
+    "cSpell.words": [
+        "AMGCL",
+        "BLAS",
+        "Chebyshev",
+        "COLAMD",
+        "Demidov",
+        "Dorival",
+        "faer",
+        "GMRES",
+        "Kazdadi",
+        "Krylov",
+        "LAPACK",
+        "nonsymmetric",
+        "nrows",
+        "nullspace",
+        "Pedroso",
+        "Ruge",
+        "Seidel",
+        "SPAI",
+        "Stuben",
+        "UMFPACK"
+    ]
+}
