@@ -12,10 +12,6 @@ harness described below.
 
 ## Hard constraints
 
-- **This repository is standalone and must stay that way.** Nothing here may name,
-  import, or otherwise reference a project that depends on this crate — not in code,
-  not in docs, not in tests, not in CI. The dependency goes one way only. When a
-  comment needs to explain a call site, say *the caller*.
 - **Dense matrices are column-major**, indexing `data[i + j * nrow]`. Sparse
   formats are solver-specific: sparse LU accepts CSC and AMGCL accepts CSR. Do
   not add implicit CSC/CSR conversion; callers provide the required format.
