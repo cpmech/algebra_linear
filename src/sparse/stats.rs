@@ -34,3 +34,18 @@ impl SparseLuStats {
         self.nnz_l + self.nnz_u
     }
 }
+
+/// Counts one multiply-add per `(L, U)` entry pair, summed over the columns.
+///
+/// This is the flop estimate shared by the simplicial and supernodal paths.
+pub(crate) fn flops_estimate(l_col_ptr: &[usize], u_col_ptr: &[usize]) -> usize {
+    debug_assert_eq!(l_col_ptr.len(), u_col_ptr.len());
+    let n = l_col_ptr.len().saturating_sub(1);
+    let mut total = 0usize;
+    for j in 0..n {
+        let nl = l_col_ptr[j + 1] - l_col_ptr[j];
+        let nu = u_col_ptr[j + 1] - u_col_ptr[j];
+        total = total.saturating_add(nl.saturating_mul(nu));
+    }
+    total
+}

@@ -1,12 +1,11 @@
 //! Sparse direct and iterative solvers.
 //!
-//! The module provides a simplicial sparse LU factorization in compressed sparse
-//! column (CSC) form, a supernodal one, and the COLAMD column ordering they use
-//! to reduce fill. The supernodal path is usable directly (`SymbolicSupernodal`,
-//! `SupernodalLu`) or through `LuSymbolic`/`LuMethod`, which chooses between the
-//! two with a flop proxy (or a forced method). The [`amgcl`] submodule provides
-//! algebraic multigrid and preconditioned Krylov solvers for compressed sparse
-//! row (CSR) matrices.
+//! [`SparseLu`] is the direct solver: it analyzes a compressed sparse column
+//! (CSC) pattern once, then factorizes any values on that pattern. The COLAMD
+//! ordering reduces fill, [`LuMethod`] chooses a simplicial or supernodal
+//! factorization, and [`SparseLuStats`] reports the structure, cost and timing.
+//! The [`amgcl`] submodule provides algebraic multigrid and preconditioned
+//! Krylov solvers for compressed sparse row (CSR) matrices.
 //!
 //! # Provenance
 //!
@@ -34,44 +33,39 @@
 //! # Example
 //!
 //! ```
-//! use algebra_linear::sparse::{CscView, SymbolicLu};
+//! use algebra_linear::sparse::{SparseLu, LuMethod};
 //!
-//! // A = [4 1; 1 3] in CSC form.
 //! let col_ptr = [0, 2, 4];
 //! let row_idx = [0, 1, 0, 1];
 //! let values = [4.0, 1.0, 1.0, 3.0];
-//!
-//! let a = CscView::new(2, 2, &col_ptr, &row_idx, &values).unwrap();
-//! let symbolic = SymbolicLu::analyze(a.pattern()).unwrap();
-//! let factors = symbolic.factorize(a).unwrap();
-//!
+//! let mut lu = SparseLu::analyze(&col_ptr, &row_idx, LuMethod::auto()).unwrap();
+//! lu.factorize(&col_ptr, &row_idx, &values).unwrap();
 //! let mut b = [1.0, 2.0];
-//! factors.solve(&mut b).unwrap();
+//! lu.solve(&mut b).unwrap();
 //! assert!((b[0] - 1.0 / 11.0).abs() < 1e-14);
 //! assert!((b[1] - 7.0 / 11.0).abs() < 1e-14);
 //! ```
 
 pub mod amgcl;
-pub mod csc;
+
+mod csc;
 mod etree;
-pub mod lu;
-pub mod ordering;
-pub mod perm;
-pub mod solver;
+mod lu;
+mod ordering;
+mod perm;
+mod solver;
+mod sparse_lu;
+mod stats;
+mod supernodal;
+mod symbolic;
 
 #[cfg(test)]
 mod accuracy_tests;
-mod stats;
-pub mod supernodal;
-pub mod symbolic;
 
-pub use csc::{CscPattern, CscView};
-pub use lu::{LuFactors, SparseScalar};
-pub use ordering::colamd::{ColamdControl, ColamdOrdering, colamd_order};
-pub use solver::{LuMethod, LuSolver, LuSymbolic};
+pub use lu::SparseScalar;
+pub use solver::LuMethod;
+pub use sparse_lu::SparseLu;
 pub use stats::SparseLuStats;
-pub use supernodal::{SupernodalLu, SymbolicSupernodal};
-pub use symbolic::SymbolicLu;
 
 /// Errors reported by the sparse routines.
 ///
@@ -96,6 +90,8 @@ pub enum SparseError {
     StructureMismatch,
     /// An entry of the matrix is NaN or infinite.
     NotFinite,
+    /// `solve` was called before a successful factorization.
+    NotFactorized,
 }
 
 impl core::fmt::Display for SparseError {
@@ -109,6 +105,7 @@ impl core::fmt::Display for SparseError {
             Self::IndexOverflow => "index or workspace size overflow",
             Self::StructureMismatch => "the matrix pattern differs from the symbolic analysis",
             Self::NotFinite => "the matrix has a NaN or infinite entry",
+            Self::NotFactorized => "the matrix has not been factorized",
         };
         f.write_str(msg)
     }

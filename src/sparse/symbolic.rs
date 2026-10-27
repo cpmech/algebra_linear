@@ -63,6 +63,8 @@ impl SymbolicLu {
     }
 
     /// Returns the number of stored entries the analysis saw.
+    // Test-only: exposed so the tests can inspect the analysis.
+    #[cfg(test)]
     #[inline]
     pub fn nnz(&self) -> usize {
         self.nnz

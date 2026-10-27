@@ -12,16 +12,10 @@
 //! applies those permutations around the two triangular solves.
 
 use core::ops::{AddAssign, Mul, SubAssign};
-use std::time::Duration;
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-use std::time::Instant;
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-use web_time::Instant;
 
 use crate::Complex64;
 use crate::sparse::SparseError;
 use crate::sparse::csc::CscView;
-use crate::sparse::stats::SparseLuStats;
 use crate::sparse::symbolic::SymbolicLu;
 
 /// The scalar types the sparse LU supports.
@@ -104,13 +98,7 @@ pub struct LuFactors<T> {
     u_row_idx: Vec<usize>,
     u_val: Vec<T>,
     row_perm: Vec<usize>,
-    row_perm_inv: Vec<usize>,
-    col_perm: Vec<usize>,
     col_perm_inv: Vec<usize>,
-    nnz_a: usize,
-    flops_estimate: usize,
-    ordering_time: Duration,
-    factorization_time: Duration,
 }
 
 impl<T> LuFactors<T> {
@@ -127,12 +115,16 @@ impl<T> LuFactors<T> {
     }
 
     /// Returns the `L` row indices (positions).
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn l_row_idx(&self) -> &[usize] {
         &self.l_row_idx
     }
 
     /// Returns the `L` values.
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn l_values(&self) -> &[T] {
         &self.l_val
@@ -145,12 +137,16 @@ impl<T> LuFactors<T> {
     }
 
     /// Returns the `U` row indices (positions).
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn u_row_idx(&self) -> &[usize] {
         &self.u_row_idx
     }
 
     /// Returns the `U` values.
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn u_values(&self) -> &[T] {
         &self.u_val
@@ -170,60 +166,11 @@ impl<T> LuFactors<T> {
 
     /// Returns the row permutation, mapping a position to an original row
     /// (`row_perm[position] = original_row`).
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn row_perm(&self) -> &[usize] {
         &self.row_perm
-    }
-
-    /// Returns the inverse row permutation.
-    #[inline]
-    pub fn row_perm_inv(&self) -> &[usize] {
-        &self.row_perm_inv
-    }
-
-    /// Returns the column permutation.
-    #[inline]
-    pub fn col_perm(&self) -> &[usize] {
-        &self.col_perm
-    }
-
-    /// Returns the inverse column permutation.
-    #[inline]
-    pub fn col_perm_inv(&self) -> &[usize] {
-        &self.col_perm_inv
-    }
-
-    /// Returns the time the ordering took, copied from the symbolic analysis.
-    #[inline]
-    pub fn ordering_time(&self) -> Duration {
-        self.ordering_time
-    }
-
-    /// Returns the time the numeric factorization took.
-    #[inline]
-    pub fn factorization_time(&self) -> Duration {
-        self.factorization_time
-    }
-
-    /// Returns the structure, cost and timing of this factorization.
-    pub fn stats(&self) -> SparseLuStats {
-        let nnz_l = self.nnz_l();
-        let nnz_u = self.nnz_u();
-        let fill_ratio = if self.nnz_a == 0 {
-            0.0
-        } else {
-            (nnz_l + nnz_u) as f64 / self.nnz_a as f64
-        };
-        SparseLuStats {
-            n: self.n,
-            nnz_a: self.nnz_a,
-            nnz_l,
-            nnz_u,
-            fill_ratio,
-            flops_estimate: self.flops_estimate,
-            ordering_time: self.ordering_time,
-            factorization_time: self.factorization_time,
-        }
     }
 }
 
@@ -249,20 +196,6 @@ impl<T: SparseScalar> LuFactors<T> {
         }
         Ok(())
     }
-
-    /// Solves `A x = b` in place and returns the elapsed time.
-    ///
-    /// This is [`Self::solve`] with a timer around it; the solve itself is not
-    /// instrumented, so the two return the same numbers.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`Self::solve`].
-    pub fn solve_timed(&self, b: &mut [T]) -> Result<Duration, SparseError> {
-        let start = Instant::now();
-        self.solve(b)?;
-        Ok(start.elapsed())
-    }
 }
 
 impl SymbolicLu {
@@ -279,7 +212,6 @@ impl SymbolicLu {
         if a.values().iter().any(|v| !v.is_finite()) {
             return Err(SparseError::NotFinite);
         }
-        let start = Instant::now();
         let n = self.n();
         let mut l_col_ptr = vec![0usize; n + 1];
         let mut u_col_ptr = vec![0usize; n + 1];
@@ -380,16 +312,6 @@ impl SymbolicLu {
             row_perm[p] = idx;
         }
 
-        // One multiply-add per (L, U) entry pair, the dominant cost of the
-        // left-looking factorization.
-        let mut flops_estimate = 0usize;
-        for j in 0..n {
-            let nl = l_col_ptr[j + 1] - l_col_ptr[j];
-            let nu = u_col_ptr[j + 1] - u_col_ptr[j];
-            flops_estimate = flops_estimate.saturating_add(nl.saturating_mul(nu));
-        }
-        let factorization_time = start.elapsed();
-
         Ok(LuFactors {
             n,
             l_col_ptr,
@@ -399,13 +321,7 @@ impl SymbolicLu {
             u_row_idx,
             u_val,
             row_perm,
-            row_perm_inv,
-            col_perm: self.col_perm().to_vec(),
             col_perm_inv: self.col_perm_inv().to_vec(),
-            nnz_a: a.nnz(),
-            flops_estimate,
-            ordering_time: self.ordering_time(),
-            factorization_time,
         })
     }
 }
@@ -550,7 +466,7 @@ pub(crate) fn upper_solve<T: SparseScalar>(col_ptr: &[usize], row_idx: &[usize],
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sparse::CscPattern;
+    use crate::sparse::csc::CscPattern;
 
     fn analyze(n: usize, col_ptr: &[usize], row_idx: &[usize]) -> SymbolicLu {
         let pattern = CscPattern::new(n, n, col_ptr, row_idx).unwrap();
@@ -626,7 +542,8 @@ mod tests {
         let col_ptr = [0, 2, 5, 8, 10];
         let row_idx = [0, 1, 0, 1, 2, 1, 2, 3, 0, 3];
         let values = [4.0, 1.0, 1.0, 3.0, 1.0, 1.0, 5.0, 1.0, 1.0, 4.0];
-        let f = factors(4, &col_ptr, &row_idx, &values);
+        let symbolic = analyze(4, &col_ptr, &row_idx);
+        let f = symbolic.factorize(CscView::new(4, 4, &col_ptr, &row_idx, &values).unwrap()).unwrap();
         let a = dense(4, &col_ptr, &row_idx, &values);
         let lu = lu_product(&f);
 
@@ -634,7 +551,7 @@ mod tests {
         for j in 0..4 {
             for i in 0..4 {
                 let r = f.row_perm()[i];
-                let c = f.col_perm()[j];
+                let c = symbolic.col_perm()[j];
                 assert_close(&[lu[i + j * 4]], &[a[r + c * 4]], 1e-12);
             }
         }
@@ -816,7 +733,8 @@ mod tests {
             }
             col_ptr.push(row_idx.len());
         }
-        let f = factors(n, &col_ptr, &row_idx, &values);
+        let symbolic = analyze(n, &col_ptr, &row_idx);
+        let f = symbolic.factorize(CscView::new(n, n, &col_ptr, &row_idx, &values).unwrap()).unwrap();
         let a = dense(n, &col_ptr, &row_idx, &values);
         let x_exact: Vec<f64> = (0..n).map(|i| ((i % 5) as f64) - 2.0).collect();
         let mut b = vec![0.0; n];
@@ -833,7 +751,7 @@ mod tests {
         for j in 0..n {
             for i in 0..n {
                 let r = f.row_perm()[i];
-                let c = f.col_perm()[j];
+                let c = symbolic.col_perm()[j];
                 assert!((lu[i + j * n] - a[r + c * n]).abs() < 1e-12);
             }
         }
@@ -890,33 +808,6 @@ mod tests {
         for i in 0..n {
             assert!((b[i] - x_exact[i]).norm() < 1e-11, "row {i}");
         }
-    }
-
-    #[test]
-    fn reports_stats_and_timings() {
-        let f = factors(2, &[0, 2, 4], &[0, 1, 0, 1], &[4.0, 1.0, 1.0, 3.0]);
-        let s = f.stats();
-        assert_eq!(s.n, 2);
-        assert_eq!(s.nnz_a, 4);
-        assert_eq!(s.nnz_l, f.nnz_l());
-        assert_eq!(s.nnz_u, f.nnz_u());
-        assert_eq!(s.nnz_factors(), s.nnz_l + s.nnz_u);
-        assert!(s.nnz_l >= 3);
-        assert!(s.flops_estimate > 0);
-        assert!(s.fill_ratio > 1.0);
-        assert_eq!(s.ordering_time, f.ordering_time());
-        assert_eq!(s.factorization_time, f.factorization_time());
-
-        let mut b = [1.0, 2.0];
-        let elapsed = f.solve_timed(&mut b).unwrap();
-        assert!(elapsed.as_nanos() < 1_000_000_000);
-        assert_close(&b, &[1.0 / 11.0, 7.0 / 11.0], 1e-14);
-
-        let empty = factors(0, &[0], &[], &[]);
-        let s = empty.stats();
-        assert_eq!(s.fill_ratio, 0.0);
-        assert_eq!(s.flops_estimate, 0);
-        assert_eq!(s.nnz_factors(), 0);
     }
 
     #[test]

@@ -7,7 +7,10 @@
 //! residual for the simplicial, supernodal and automatic paths.
 
 use crate::lapack::families::{Dist, Dlatms, DlatmsPack, DlatmsSym, dlatms};
-use crate::sparse::{CscPattern, CscView, LuMethod, LuSymbolic, SymbolicLu, SymbolicSupernodal};
+use crate::sparse::csc::{CscPattern, CscView};
+use crate::sparse::solver::{LuMethod, LuSymbolic};
+use crate::sparse::supernodal::SymbolicSupernodal;
+use crate::sparse::symbolic::SymbolicLu;
 
 /// Builds an `n x n` random matrix with singular values from `cond` down to 1.
 fn random_square(n: usize, cond: f64, seed: [u32; 4]) -> Vec<f64> {

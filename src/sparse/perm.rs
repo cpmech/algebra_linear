@@ -4,6 +4,7 @@
 //! routines here allocate their results and return [`SparseError`] rather than
 //! panicking on malformed input.
 
+#[cfg(test)]
 use super::SparseError;
 
 /// Returns `true` if every index in `0..perm.len()` appears exactly once.
@@ -29,6 +30,7 @@ pub fn is_permutation(perm: &[usize]) -> bool {
 /// # Errors
 ///
 /// [`SparseError::BadShape`] if `perm` is not a permutation.
+#[cfg(test)]
 pub fn invert(perm: &[usize]) -> Result<Vec<usize>, SparseError> {
     if !is_permutation(perm) {
         return Err(SparseError::BadShape);
@@ -38,39 +40,6 @@ pub fn invert(perm: &[usize]) -> Result<Vec<usize>, SparseError> {
         inverse[old] = new;
     }
     Ok(inverse)
-}
-
-/// Composes two permutations: `compose(a, b)[i] = a[b[i]]`.
-///
-/// # Errors
-///
-/// [`SparseError::BadShape`] if the lengths differ or either argument is not a
-/// permutation.
-pub fn compose(a: &[usize], b: &[usize]) -> Result<Vec<usize>, SparseError> {
-    if a.len() != b.len() || !is_permutation(a) || !is_permutation(b) {
-        return Err(SparseError::BadShape);
-    }
-    Ok(b.iter().map(|&bi| a[bi]).collect())
-}
-
-/// Permutes `x` in place: `x[i] = old[perm[i]]`.
-///
-/// This is the direction the sparse solve uses for the row permutation, so it
-/// matches the element order of a permuted right-hand side.
-///
-/// # Errors
-///
-/// [`SparseError::BadShape`] if `x.len() != perm.len()` or `perm` is not a
-/// permutation.
-pub fn permute<T: Copy>(x: &mut [T], perm: &[usize]) -> Result<(), SparseError> {
-    if x.len() != perm.len() || !is_permutation(perm) {
-        return Err(SparseError::BadShape);
-    }
-    let copy = x.to_vec();
-    for (i, &p) in perm.iter().enumerate() {
-        x[i] = copy[p];
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -94,22 +63,5 @@ mod tests {
         assert_eq!(inv, [1, 2, 0]);
         assert_eq!(invert(&[]).unwrap(), Vec::<usize>::new());
         assert_eq!(invert(&[0, 1, 1]).unwrap_err(), SparseError::BadShape);
-    }
-
-    #[test]
-    fn composes_two_permutations() {
-        let a = [2, 0, 1];
-        let b = [1, 2, 0];
-        assert_eq!(compose(&a, &b).unwrap(), [a[1], a[2], a[0]]);
-        assert_eq!(compose(&a, &[0, 0, 1]).unwrap_err(), SparseError::BadShape);
-        assert_eq!(compose(&a, &[0, 1]).unwrap_err(), SparseError::BadShape);
-    }
-
-    #[test]
-    fn permutes_a_vector() {
-        let mut x = [10, 20, 30];
-        permute(&mut x, &[2, 0, 1]).unwrap();
-        assert_eq!(x, [30, 10, 20]);
-        assert_eq!(permute(&mut x, &[0, 1]).unwrap_err(), SparseError::BadShape);
     }
 }
