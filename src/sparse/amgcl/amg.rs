@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use crate::sparse::amgcl::coarse::DenseLu;
 use crate::sparse::amgcl::coarsening::{Coarsening, transfer};
+use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::parallel::Parallelism;
 use crate::sparse::amgcl::preconditioner::Preconditioner;
 use crate::sparse::amgcl::relaxation::{Relaxation, Smoother};
 use crate::sparse::amgcl::vector::check_finite_with;
-use crate::sparse::amgcl::{CsrMatrix, Error, Result};
+use crate::sparse::amgcl::{Error, Result};
 
 /// AMG hierarchy and cycle parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,7 +81,7 @@ pub struct LevelInfo {
 
 #[derive(Debug)]
 struct Level {
-    a: CsrMatrix,
+    a: Arc<CsrMatrix>,
     p: Option<CsrMatrix>,
     r: Option<CsrMatrix>,
     relaxation: Option<Relaxation>,
@@ -106,7 +109,7 @@ impl Level {
         };
         let coarse_size = p.as_ref().map_or(0, CsrMatrix::ncols);
         Ok(Self {
-            a,
+            a: Arc::new(a),
             p,
             r,
             relaxation,
@@ -115,6 +118,20 @@ impl Level {
             coarse_rhs: vec![0.0; coarse_size],
             coarse_solution: vec![0.0; coarse_size],
         })
+    }
+
+    /// A single level with no relaxation and no coarse factorization.
+    fn matrix_only(a: CsrMatrix) -> Self {
+        Self {
+            a: Arc::new(a),
+            p: None,
+            r: None,
+            relaxation: None,
+            coarse: None,
+            residual: Vec::new(),
+            coarse_rhs: Vec::new(),
+            coarse_solution: Vec::new(),
+        }
     }
 
     fn relax(&mut self, forward: bool, rhs: &[f64], x: &mut [f64], parallel: Parallelism) {
@@ -127,28 +144,57 @@ impl Level {
 
 /// Algebraic multigrid hierarchy usable directly or as a preconditioner.
 ///
-/// The type owns all matrices and reusable work vectors. [`Amg::apply`] and
-/// Krylov solves therefore take `&mut self`. Serial cycles perform no allocation;
-/// parallel execution only adds scoped-worker bookkeeping.
+/// Build the state with [`amg_setup`] and solve the stored finest-level system
+/// with [`krylov_solve`](crate::sparse::amgcl::krylov_solve). The type owns all
+/// matrices and reusable work vectors, so [`Amg::apply`] and Krylov solves take
+/// `&mut self`. Serial cycles perform no allocation; parallel execution only
+/// adds scoped-worker bookkeeping.
 #[derive(Debug)]
 pub struct Amg {
-    params: AmgParams,
+    /// `None` is matrix-only state: the finest matrix with no relaxation.
+    params: Option<AmgParams>,
     levels: Vec<Level>,
+}
+
+/// Builds AMG state from raw compressed sparse row (CSR) arrays.
+///
+/// The matrix is `n` by `n` with `n = row_ptr.len() - 1`. The arrays are
+/// validated as they are copied into the private matrix: the row pointers must
+/// be monotone and in range, the column indices in `0..n`, and every value
+/// finite.
+///
+/// `params = None` builds matrix-only state: one level holding the finest
+/// matrix, no relaxation and no coarse factorization. [`Amg::apply`] on that
+/// state copies the right-hand side to the solution, which is the identity
+/// preconditioner, and [`krylov_solve`](crate::sparse::amgcl::krylov_solve)
+/// works with it.
+///
+/// # Errors
+///
+/// [`Error::InvalidMatrix`] if the CSR arrays are malformed or the matrix is
+/// empty, and the parameter errors of the AMG hierarchy otherwise.
+pub fn amg_setup(row_ptr: &[usize], col_idx: &[usize], values: &[f64], params: Option<AmgParams>) -> Result<Amg> {
+    let n = row_ptr
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| Error::InvalidMatrix("row_ptr must hold at least one entry".into()))?;
+    let matrix = CsrMatrix::from_parts(n, n, row_ptr.to_vec(), col_idx.to_vec(), values.to_vec())?;
+    if matrix.nrows() == 0 {
+        return Err(Error::InvalidMatrix("AMG matrix is empty".into()));
+    }
+    match params {
+        Some(params) => Amg::build(matrix, params),
+        None => Ok(Amg::matrix_only(matrix)),
+    }
 }
 
 impl Amg {
     /// Builds the selected AMG hierarchy and all Galerkin coarse operators.
-    pub fn new(matrix: &CsrMatrix, params: AmgParams) -> Result<Self> {
+    fn build(matrix: CsrMatrix, params: AmgParams) -> Result<Self> {
         params.validate()?;
-        if !matrix.is_square() {
-            return Err(Error::InvalidMatrix("AMG requires a square system matrix".into()));
-        }
-        if matrix.nrows() == 0 {
-            return Err(Error::InvalidMatrix("AMG matrix is empty".into()));
-        }
 
         let mut levels = Vec::new();
-        let mut current = matrix.clone();
+        let mut current = matrix;
         let mut coarsening = params.coarsening;
         loop {
             let n = current.nrows();
@@ -180,28 +226,55 @@ impl Amg {
             levels.push(Level::new(current, None, None, coarse, params.smoother, params.parallelism)?);
             break;
         }
-        Ok(Self { params, levels })
+        Ok(Self {
+            params: Some(params),
+            levels,
+        })
+    }
+
+    /// Matrix-only state: the finest matrix and nothing else.
+    fn matrix_only(matrix: CsrMatrix) -> Self {
+        Self {
+            params: None,
+            levels: vec![Level::matrix_only(matrix)],
+        }
+    }
+
+    /// Returns a handle to the level-0 matrix.
+    pub(crate) fn matrix_handle(&self) -> Arc<CsrMatrix> {
+        Arc::clone(&self.levels[0].a)
     }
 
     /// Applies the configured number of cycles after clearing `x`.
+    ///
+    /// Matrix-only state copies `rhs` to `x`: it is the identity preconditioner.
     pub fn apply(&mut self, rhs: &[f64], x: &mut [f64]) -> Result<()> {
         self.check_vectors(rhs, x)?;
-        if self.params.preconditioner_cycles == 0 {
+        let Some(params) = self.params else {
+            x.copy_from_slice(rhs);
+            return Ok(());
+        };
+        if params.preconditioner_cycles == 0 {
             x.copy_from_slice(rhs);
             return Ok(());
         }
         x.fill(0.0);
-        for _ in 0..self.params.preconditioner_cycles {
-            Self::cycle_impl(&mut self.levels, self.params, rhs, x);
+        for _ in 0..params.preconditioner_cycles {
+            Self::cycle_impl(&mut self.levels, params, rhs, x);
         }
-        check_finite_with(x, self.params.parallelism)
+        check_finite_with(x, params.parallelism)
     }
 
     /// Adds one AMG cycle to the existing approximation `x`.
+    ///
+    /// Matrix-only state has no cycle to add, so `x` is left unchanged.
     pub fn cycle(&mut self, rhs: &[f64], x: &mut [f64]) -> Result<()> {
         self.check_vectors(rhs, x)?;
-        Self::cycle_impl(&mut self.levels, self.params, rhs, x);
-        check_finite_with(x, self.params.parallelism)
+        let Some(params) = self.params else {
+            return Ok(());
+        };
+        Self::cycle_impl(&mut self.levels, params, rhs, x);
+        check_finite_with(x, params.parallelism)
     }
 
     fn cycle_impl(levels: &mut [Level], params: AmgParams, rhs: &[f64], x: &mut [f64]) {
@@ -243,11 +316,6 @@ impl Amg {
         }
     }
 
-    /// Returns the finest-level system matrix.
-    pub fn system_matrix(&self) -> &CsrMatrix {
-        &self.levels[0].a
-    }
-
     /// Iterates over level dimensions from finest to coarsest.
     pub fn levels(&self) -> impl ExactSizeIterator<Item = LevelInfo> + '_ {
         self.levels.iter().map(|level| LevelInfo {
@@ -268,7 +336,7 @@ impl Amg {
     }
 
     fn check_vectors(&self, rhs: &[f64], x: &[f64]) -> Result<()> {
-        let n = self.system_matrix().nrows();
+        let n = self.levels[0].a.nrows();
         if rhs.len() != n || x.len() != n {
             return Err(Error::DimensionMismatch {
                 expected: n,

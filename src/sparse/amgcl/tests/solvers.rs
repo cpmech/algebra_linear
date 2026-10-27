@@ -1,4 +1,8 @@
-use crate::sparse::amgcl::{Amg, AmgParams, BiCgStab, Cg, CsrMatrix, Gmres, Identity, Smoother, SolverParams};
+use super::setup;
+use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::preconditioner::Identity;
+use crate::sparse::amgcl::solver::{BiCgStab, Cg, Gmres};
+use crate::sparse::amgcl::{AmgParams, KrylovMethod, Smoother, SolverParams, krylov_solve};
 
 fn residual(a: &CsrMatrix, b: &[f64], x: &[f64]) -> f64 {
     let mut r = vec![0.0; b.len()];
@@ -25,9 +29,9 @@ fn amg_cg_solves_1d_poisson() {
     let a = poisson_1d(200);
     let b = vec![1.0; a.nrows()];
     let mut x = vec![0.0; a.nrows()];
-    let mut amg = Amg::new(&a, AmgParams::default()).unwrap();
+    let mut amg = setup(&a, Some(AmgParams::default()));
     assert!(amg.levels().len() >= 2);
-    let report = Cg::default().solve(&a, &mut amg, &b, &mut x).unwrap();
+    let report = krylov_solve(KrylovMethod::Cg, &mut amg, &b, &mut x, SolverParams::default()).unwrap();
     assert!(report.converged, "{report:?}");
     assert!(report.iterations < 30, "{report:?}");
     assert!(residual(&a, &b, &x) < 1e-8);
@@ -42,13 +46,18 @@ fn amg_cg_solves_2d_poisson_from_nonzero_guess() {
         smoother: Smoother::DampedJacobi(0.72),
         ..AmgParams::default()
     };
-    let mut amg = Amg::new(&a, params).unwrap();
-    let report = Cg::new(SolverParams {
-        tolerance: 1e-10,
-        max_iterations: 100,
-        ..SolverParams::default()
-    })
-    .solve(&a, &mut amg, &b, &mut x)
+    let mut amg = setup(&a, Some(params));
+    let report = krylov_solve(
+        KrylovMethod::Cg,
+        &mut amg,
+        &b,
+        &mut x,
+        SolverParams {
+            tolerance: 1e-10,
+            max_iterations: 100,
+            ..SolverParams::default()
+        },
+    )
     .unwrap();
     assert!(report.converged, "{report:?}");
     assert!(report.iterations < 50, "{report:?}");
@@ -107,7 +116,7 @@ fn coarse_lu_uses_partial_pivoting() {
     let a = CsrMatrix::from_triplets(2, 2, [(0, 1, 2.0), (1, 0, 3.0), (1, 1, 4.0)]).unwrap();
     let b = vec![2.0, 7.0];
     let mut x = vec![0.0; 2];
-    let mut amg = Amg::new(&a, AmgParams::default()).unwrap();
+    let mut amg = setup(&a, Some(AmgParams::default()));
     amg.apply(&b, &mut x).unwrap();
     assert!((x[0] - 1.0).abs() < 1e-14, "{x:?}");
     assert!((x[1] - 1.0).abs() < 1e-14, "{x:?}");
@@ -134,7 +143,7 @@ fn direct_small_amg_level_is_exact() {
     let a = poisson_1d(8);
     let b: Vec<f64> = (0..8).map(|i| i as f64).collect();
     let mut x = vec![0.0; 8];
-    let mut amg = Amg::new(&a, AmgParams::default()).unwrap();
+    let mut amg = setup(&a, Some(AmgParams::default()));
     amg.apply(&b, &mut x).unwrap();
     assert!(residual(&a, &b, &x) < 1e-13);
 }

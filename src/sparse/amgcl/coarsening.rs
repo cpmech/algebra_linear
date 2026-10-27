@@ -4,7 +4,8 @@ mod aggregation;
 
 pub use aggregation::{AggregationParams, PlainAggregationParams, SmoothedAggregationParams};
 
-use crate::sparse::amgcl::{CsrMatrix, Error, Result};
+use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::{Error, Result};
 use aggregation::Transfer;
 
 const U: u8 = 0;

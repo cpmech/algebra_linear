@@ -1,4 +1,6 @@
-use crate::sparse::amgcl::{Amg, AmgParams, Cg, CsrMatrix, SolverParams};
+use super::setup;
+use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::{AmgParams, KrylovMethod, SolverParams, krylov_solve};
 
 /// Deterministic irregular symmetric M-matrices exercise C/F splitting and
 /// interpolation without relying on a random-number dependency.
@@ -30,20 +32,24 @@ fn amg_converges_on_irregular_spd_matrices() {
         let a = irregular_m_matrix(n, case as u64 + 11);
         let b: Vec<f64> = (0..n).map(|i| ((i * 13 + case) % 17) as f64 - 4.0).collect();
         let mut x = vec![0.0; n];
-        let mut amg = Amg::new(
+        let mut amg = setup(
             &a,
-            AmgParams {
+            Some(AmgParams {
                 coarse_enough: 8,
                 ..AmgParams::default()
+            }),
+        );
+        let report = krylov_solve(
+            KrylovMethod::Cg,
+            &mut amg,
+            &b,
+            &mut x,
+            SolverParams {
+                tolerance: 1e-9,
+                max_iterations: 100,
+                ..SolverParams::default()
             },
         )
-        .unwrap();
-        let report = Cg::new(SolverParams {
-            tolerance: 1e-9,
-            max_iterations: 100,
-            ..SolverParams::default()
-        })
-        .solve(&a, &mut amg, &b, &mut x)
         .unwrap();
         assert!(report.converged, "case {case}, n {n}: {report:?}");
         let mut r = vec![0.0; n];

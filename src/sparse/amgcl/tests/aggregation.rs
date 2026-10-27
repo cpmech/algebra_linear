@@ -1,5 +1,8 @@
+use super::setup;
+use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::{
-    AggregationParams, Amg, AmgParams, Cg, Coarsening, CsrMatrix, Error, PlainAggregationParams, SmoothedAggregationParams, SolverParams,
+    AggregationParams, AmgParams, Coarsening, Error, KrylovMethod, PlainAggregationParams, SmoothedAggregationParams, SolverParams, amg_setup,
+    krylov_solve,
 };
 
 fn residual(a: &CsrMatrix, b: &[f64], x: &[f64]) -> f64 {
@@ -17,15 +20,20 @@ fn solve(coarsening: Coarsening) -> (crate::sparse::amgcl::SolveReport, f64, usi
         coarse_enough: 16,
         ..AmgParams::default()
     };
-    let mut amg = Amg::new(&a, params).unwrap();
+    let mut amg = setup(&a, Some(params));
     let levels = amg.levels().len();
     assert!(levels >= 3, "expected at least three levels, got {levels}");
-    let report = Cg::new(SolverParams {
-        tolerance: 1e-10,
-        max_iterations: 150,
-        ..SolverParams::default()
-    })
-    .solve(&a, &mut amg, &b, &mut x)
+    let report = krylov_solve(
+        KrylovMethod::Cg,
+        &mut amg,
+        &b,
+        &mut x,
+        SolverParams {
+            tolerance: 1e-10,
+            max_iterations: 150,
+            ..SolverParams::default()
+        },
+    )
     .unwrap();
     let true_residual = residual(&a, &b, &x);
     (report, true_residual, levels)
@@ -71,16 +79,15 @@ fn aggregation_handles_unsorted_duplicate_diagonals() {
     .unwrap();
     let b = vec![1.0; 3];
     let mut x = vec![0.0; 3];
-    let mut amg = Amg::new(
+    let mut amg = setup(
         &a,
-        AmgParams {
+        Some(AmgParams {
             coarsening: Coarsening::Aggregation(AggregationParams::default()),
             coarse_enough: 1,
             ..AmgParams::default()
-        },
-    )
-    .unwrap();
-    let report = Cg::default().solve(&a, &mut amg, &b, &mut x).unwrap();
+        }),
+    );
+    let report = krylov_solve(KrylovMethod::Cg, &mut amg, &b, &mut x, SolverParams::default()).unwrap();
     assert!(report.converged, "{report:?}");
     assert!(residual(&a, &b, &x) < 1e-8);
 }
@@ -107,12 +114,14 @@ fn invalid_aggregation_parameters_are_rejected_before_setup() {
         }),
     ];
     for coarsening in cases {
-        let error = Amg::new(
-            &a,
-            AmgParams {
+        let error = amg_setup(
+            a.row_offsets(),
+            a.col_indices(),
+            a.values(),
+            Some(AmgParams {
                 coarsening,
                 ..AmgParams::default()
-            },
+            }),
         )
         .unwrap_err();
         assert!(matches!(error, Error::InvalidParameter(_)), "{error:?}");

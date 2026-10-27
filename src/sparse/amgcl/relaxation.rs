@@ -1,8 +1,9 @@
 //! Serial relaxation schemes and their per-level setup data.
 
+use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::parallel::{Parallelism, for_each_mut, map_chunks};
 use crate::sparse::amgcl::vector::{axpy_with, norm, norm_with};
-use crate::sparse::amgcl::{CsrMatrix, Error, Result};
+use crate::sparse::amgcl::{Error, Result};
 
 /// Incomplete LU with zero fill-in parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]

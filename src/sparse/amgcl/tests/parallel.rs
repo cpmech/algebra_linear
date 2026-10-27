@@ -1,6 +1,10 @@
+use super::setup;
+use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::preconditioner::Identity;
+use crate::sparse::amgcl::solver::{BiCgStab, Gmres};
 use crate::sparse::amgcl::{
-    AggregationParams, Amg, AmgParams, BiCgStab, Cg, ChebyshevParams, Coarsening, CsrMatrix, Error, Gmres, Identity, Ilu0Params, Parallelism,
-    SmoothedAggregationParams, Smoother, SolverParams,
+    AggregationParams, AmgParams, ChebyshevParams, Coarsening, Error, Ilu0Params, KrylovMethod, Parallelism, SmoothedAggregationParams, Smoother,
+    SolverParams, amg_setup, krylov_solve,
 };
 
 fn parallel() -> Parallelism {
@@ -68,18 +72,27 @@ fn every_smoother_works_in_parallel_amg_gmres() {
     let a = CsrMatrix::poisson_2d(20, 20).unwrap();
     let b: Vec<f64> = (0..a.nrows()).map(|i| 1.0 + (i % 5) as f64).collect();
     for smoother in smoothers {
-        let mut amg = Amg::new(
+        let mut amg = setup(
             &a,
-            AmgParams {
+            Some(AmgParams {
                 smoother,
                 parallelism: parallel(),
                 coarse_enough: 16,
                 ..AmgParams::default()
+            }),
+        );
+        let mut x = vec![0.0; a.nrows()];
+        let report = krylov_solve(
+            KrylovMethod::Gmres,
+            &mut amg,
+            &b,
+            &mut x,
+            SolverParams {
+                gmres_restart: 20,
+                ..solver_params()
             },
         )
         .unwrap();
-        let mut x = vec![0.0; a.nrows()];
-        let report = Gmres::new(solver_params(), 20).unwrap().solve(&a, &mut amg, &b, &mut x).unwrap();
         assert!(report.converged, "{smoother:?}: {report:?}");
         assert!(residual(&a, &b, &x) < 1e-8, "{smoother:?}");
     }
@@ -96,10 +109,10 @@ fn parallel_cg_is_deterministic_and_converges() {
         parallelism: parallel(),
         ..AmgParams::default()
     };
-    let mut first_amg = Amg::new(&a, params).unwrap();
-    let mut second_amg = Amg::new(&a, params).unwrap();
-    let first_report = Cg::new(solver_params()).solve(&a, &mut first_amg, &b, &mut first).unwrap();
-    let second_report = Cg::new(solver_params()).solve(&a, &mut second_amg, &b, &mut second).unwrap();
+    let mut first_amg = setup(&a, Some(params));
+    let mut second_amg = setup(&a, Some(params));
+    let first_report = krylov_solve(KrylovMethod::Cg, &mut first_amg, &b, &mut first, solver_params()).unwrap();
+    let second_report = krylov_solve(KrylovMethod::Cg, &mut second_amg, &b, &mut second, solver_params()).unwrap();
     assert!(first_report.converged, "{first_report:?}");
     assert_eq!(first_report, second_report);
     assert_eq!(first, second);
@@ -119,18 +132,17 @@ fn parallel_aggregation_hierarchies_converge() {
         }),
     ];
     for coarsening in strategies {
-        let mut amg = Amg::new(
+        let mut amg = setup(
             &a,
-            AmgParams {
+            Some(AmgParams {
                 coarsening,
                 parallelism: parallel(),
                 coarse_enough: 16,
                 ..AmgParams::default()
-            },
-        )
-        .unwrap();
+            }),
+        );
         let mut x = vec![0.0; a.nrows()];
-        let report = Cg::new(solver_params()).solve(&a, &mut amg, &b, &mut x).unwrap();
+        let report = krylov_solve(KrylovMethod::Cg, &mut amg, &b, &mut x, solver_params()).unwrap();
         assert!(report.converged, "{coarsening:?}: {report:?}");
         assert!(residual(&a, &b, &x) < 1e-8);
     }
@@ -178,21 +190,29 @@ fn parallel_bicgstab_and_gmres_handle_nonsymmetric_systems() {
 fn zero_threads_are_rejected_by_public_entry_points() {
     let a = CsrMatrix::from_triplets(1, 1, [(0, 0, 1.0)]).unwrap();
     let invalid = Parallelism::new(0);
-    let error = Amg::new(
-        &a,
-        AmgParams {
+    let error = amg_setup(
+        a.row_offsets(),
+        a.col_indices(),
+        a.values(),
+        Some(AmgParams {
             parallelism: invalid,
             ..AmgParams::default()
-        },
+        }),
     )
     .unwrap_err();
     assert!(matches!(error, Error::InvalidParameter(_)));
 
-    let error = Cg::new(SolverParams {
-        parallelism: invalid,
-        ..SolverParams::default()
-    })
-    .solve(&a, &mut Identity, &[1.0], &mut [0.0])
+    let mut amg = setup(&a, None);
+    let error = krylov_solve(
+        KrylovMethod::Cg,
+        &mut amg,
+        &[1.0],
+        &mut [0.0],
+        SolverParams {
+            parallelism: invalid,
+            ..SolverParams::default()
+        },
+    )
     .unwrap_err();
     assert!(matches!(error, Error::InvalidParameter(_)));
 

@@ -1,7 +1,8 @@
 //! Greedy aggregation and aggregation-based transfer operators.
 
+use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::relaxation::{inverse_diagonal, spectral_radius};
-use crate::sparse::amgcl::{CsrMatrix, Error, Result};
+use crate::sparse::amgcl::{Error, Result};
 
 const UNDEFINED: isize = -1;
 const REMOVED: isize = -2;

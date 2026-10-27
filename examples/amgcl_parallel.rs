@@ -1,27 +1,37 @@
-use algebra_linear::sparse::amgcl::{Amg, AmgParams, Cg, CsrMatrix, Parallelism, Smoother, SolveReport, SolverParams};
+use algebra_linear::sparse::amgcl::{AmgParams, KrylovMethod, Parallelism, Smoother, SolveReport, SolverParams, amg_setup, krylov_solve};
 
-fn solve(a: &CsrMatrix, parallelism: Parallelism) -> Result<SolveReport, algebra_linear::sparse::amgcl::Error> {
-    let mut amg = Amg::new(
-        a,
-        AmgParams {
+pub mod common;
+
+fn solve(a: &common::Csr, parallelism: Parallelism) -> Result<SolveReport, algebra_linear::sparse::amgcl::Error> {
+    let unknowns = a.rows();
+    let mut amg = amg_setup(
+        &a.row_ptr,
+        &a.col_idx,
+        &a.values,
+        Some(AmgParams {
             smoother: Smoother::DampedJacobi(0.72),
             parallelism,
             ..AmgParams::default()
-        },
+        }),
     )?;
-    let b = vec![1.0; a.nrows()];
-    let mut x = vec![0.0; a.nrows()];
-    Cg::new(SolverParams {
-        tolerance: 1e-10,
-        max_iterations: 100,
-        parallelism,
-        ..SolverParams::default()
-    })
-    .solve(a, &mut amg, &b, &mut x)
+    let b = vec![1.0; unknowns];
+    let mut x = vec![0.0; unknowns];
+    krylov_solve(
+        KrylovMethod::Cg,
+        &mut amg,
+        &b,
+        &mut x,
+        SolverParams {
+            tolerance: 1e-10,
+            max_iterations: 100,
+            parallelism,
+            ..SolverParams::default()
+        },
+    )
 }
 
 fn main() -> Result<(), algebra_linear::sparse::amgcl::Error> {
-    let a = CsrMatrix::poisson_2d(64, 64)?;
+    let a = common::poisson_2d(64, 64);
     let threads = std::env::args()
         .nth(1)
         .and_then(|value| value.parse().ok())

@@ -6,9 +6,22 @@ pub use bicgstab::BiCgStab;
 pub use cg::Cg;
 pub use gmres::Gmres;
 
+use crate::sparse::amgcl::amg::Amg;
+use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::parallel::Parallelism;
 use crate::sparse::amgcl::vector::{check_finite_with, norm_with};
-use crate::sparse::amgcl::{CsrMatrix, Error, Result};
+use crate::sparse::amgcl::{Error, Result};
+
+/// Krylov method selected for [`krylov_solve`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KrylovMethod {
+    /// Preconditioned conjugate gradients, for symmetric positive-definite systems.
+    Cg,
+    /// Right-preconditioned BiCGStab, for general square systems.
+    BiCgStab,
+    /// Right-preconditioned restarted GMRES, for general square systems.
+    Gmres,
+}
 
 /// Common stopping parameters for iterative solvers.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,6 +32,8 @@ pub struct SolverParams {
     pub tolerance: f64,
     /// Absolute target; the solver stops at the larger of this and the relative target.
     pub absolute_tolerance: f64,
+    /// Maximum Krylov dimension between restarts, used only by GMRES.
+    pub gmres_restart: usize,
     /// Shared-memory execution for matrix and vector kernels.
     pub parallelism: Parallelism,
 }
@@ -29,6 +44,7 @@ impl Default for SolverParams {
             max_iterations: 100,
             tolerance: 1e-8,
             absolute_tolerance: 0.0,
+            gmres_restart: 30,
             parallelism: Parallelism::default(),
         }
     }
@@ -83,5 +99,26 @@ pub(crate) fn report(iterations: usize, residual: f64, norm_rhs: f64, target: f6
         iterations,
         relative_residual: residual / norm_rhs,
         converged: residual <= target,
+    }
+}
+
+/// Solves the finest-level system stored in `amg` with the selected Krylov method.
+///
+/// There is no matrix argument: the solve matrix is the level-0 copy inside the
+/// AMG state, so its values cannot go stale. `amg` is also the preconditioner;
+/// [`amg_setup`](crate::sparse::amgcl::amg_setup) with `None` makes it the
+/// identity.
+///
+/// # Errors
+///
+/// The dimension, parameter and finiteness errors of the selected solver, plus
+/// [`Error::InvalidParameter`] when `params.gmres_restart` is zero and the
+/// method is [`KrylovMethod::Gmres`].
+pub fn krylov_solve(method: KrylovMethod, amg: &mut Amg, rhs: &[f64], x: &mut [f64], params: SolverParams) -> Result<SolveReport> {
+    let matrix = amg.matrix_handle();
+    match method {
+        KrylovMethod::Cg => Cg::new(params).solve(matrix.as_ref(), amg, rhs, x),
+        KrylovMethod::BiCgStab => BiCgStab::new(params).solve(matrix.as_ref(), amg, rhs, x),
+        KrylovMethod::Gmres => Gmres::new(params, params.gmres_restart)?.solve(matrix.as_ref(), amg, rhs, x),
     }
 }

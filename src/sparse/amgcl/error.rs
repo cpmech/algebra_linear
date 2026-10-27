@@ -2,7 +2,6 @@ use core::fmt;
 
 /// Errors reported by matrix construction, AMG setup, and iterative solvers.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub enum Error {
     /// CSR arrays or matrix entries are inconsistent.
     InvalidMatrix(String),
