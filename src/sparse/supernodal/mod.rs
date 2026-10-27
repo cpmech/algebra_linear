@@ -13,6 +13,7 @@
 
 use crate::sparse::csc::CscPattern;
 use crate::sparse::etree;
+#[cfg(test)]
 use crate::sparse::ordering::colamd::{ColamdControl, colamd_order};
 
 pub mod lu;
@@ -46,6 +47,7 @@ impl SymbolicSupernodal {
     ///
     /// [`SparseError::BadShape`] if the matrix is not square, plus the ordering
     /// errors of [`colamd_order`].
+    #[cfg(test)]
     pub fn analyze(pattern: CscPattern<'_>) -> Result<Self, SparseError> {
         if pattern.nrows() != pattern.ncols() {
             return Err(SparseError::BadShape);
@@ -93,18 +95,6 @@ impl SymbolicSupernodal {
         })
     }
 
-    /// Returns the order of the matrix.
-    #[inline]
-    pub fn n(&self) -> usize {
-        self.n
-    }
-
-    /// Returns the number of stored entries the analysis saw.
-    #[inline]
-    pub fn nnz(&self) -> usize {
-        self.nnz
-    }
-
     /// Returns `true` if `pattern` is the one this analysis was built for.
     pub fn matches(&self, pattern: CscPattern<'_>) -> bool {
         pattern.nrows() == self.n && pattern.ncols() == self.n && pattern.nnz() == self.nnz && fingerprint(pattern) == self.fingerprint
@@ -118,12 +108,14 @@ impl SymbolicSupernodal {
 
     /// Returns the column boundaries: supernode `s` owns columns
     /// `supernode_ptr[s]..supernode_ptr[s + 1]`.
+    #[cfg(test)]
     #[inline]
     pub fn supernode_ptr(&self) -> &[usize] {
         &self.supernode_ptr
     }
 
     /// Returns the supernode elimination tree; `-1` marks a root.
+    #[cfg(test)]
     #[inline]
     pub fn super_etree(&self) -> &[isize] {
         &self.super_etree
@@ -137,22 +129,10 @@ impl SymbolicSupernodal {
     }
 
     /// Returns the column elimination tree; `-1` marks a root.
+    #[cfg(test)]
     #[inline]
     pub fn etree(&self) -> &[isize] {
         &self.etree
-    }
-
-    /// Returns the column permutation, mapping a new position to an original
-    /// column.
-    #[inline]
-    pub fn col_perm(&self) -> &[usize] {
-        &self.col_perm
-    }
-
-    /// Returns the inverse column permutation.
-    #[inline]
-    pub fn col_perm_inv(&self) -> &[usize] {
-        &self.col_perm_inv
     }
 
     /// Returns the number of columns in supernode `s`.
@@ -160,6 +140,7 @@ impl SymbolicSupernodal {
     /// # Panics
     ///
     /// Panics if `s >= n_supernodes()`.
+    #[cfg(test)]
     #[inline]
     pub fn supernode_size(&self, s: usize) -> usize {
         self.supernode_ptr[s + 1] - self.supernode_ptr[s]
@@ -643,8 +624,8 @@ mod tests {
             }
         }
         let pattern = CscPattern::new(n, n, &cp, &ri).unwrap();
-        let view = crate::sparse::CscView::new(n, n, &cp, &ri, &values).unwrap();
-        let simplicial = crate::sparse::SymbolicLu::analyze(pattern).unwrap();
+        let view = crate::sparse::csc::CscView::new(n, n, &cp, &ri, &values).unwrap();
+        let simplicial = crate::sparse::symbolic::SymbolicLu::analyze(pattern).unwrap();
         let mut b0 = vec![1.0; n];
         simplicial.factorize(view).unwrap().solve(&mut b0).unwrap();
 

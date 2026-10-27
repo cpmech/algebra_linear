@@ -1,5 +1,6 @@
 use crate::lapack::{LapackError, dgetrf, dgetrs};
-use crate::sparse::amgcl::{CsrMatrix, Error, Result};
+use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::{Error, Result};
 
 /// Dense LU factorization with partial pivoting for the coarsest AMG level.
 ///

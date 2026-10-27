@@ -1,8 +1,11 @@
-use algebra_linear::sparse::amgcl::{Amg, AmgParams, ChebyshevParams, CsrMatrix, Gmres, Ilu0Params, Smoother, SolverParams};
+use algebra_linear::sparse::amgcl::{AmgParams, ChebyshevParams, Ilu0Params, KrylovMethod, Smoother, SolverParams, amg_setup, krylov_solve};
+
+pub mod common;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let a = CsrMatrix::poisson_2d(24, 24)?;
-    let b = vec![1.0; a.nrows()];
+    let a = common::poisson_2d(24, 24);
+    let unknowns = a.rows();
+    let b = vec![1.0; unknowns];
     let smoothers = [
         ("Gauss-Seidel", Smoother::GaussSeidel),
         ("Damped Jacobi", Smoother::DampedJacobi(0.72)),
@@ -21,23 +24,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     for (name, smoother) in smoothers {
-        let mut amg = Amg::new(
-            &a,
-            AmgParams {
+        let mut amg = amg_setup(
+            &a.row_ptr,
+            &a.col_idx,
+            &a.values,
+            Some(AmgParams {
                 smoother,
                 ..AmgParams::default()
-            },
+            }),
         )?;
-        let mut x = vec![0.0; a.nrows()];
-        let report = Gmres::new(
+        let mut x = vec![0.0; unknowns];
+        let report = krylov_solve(
+            KrylovMethod::Gmres,
+            &mut amg,
+            &b,
+            &mut x,
             SolverParams {
                 tolerance: 1e-9,
                 max_iterations: 100,
+                gmres_restart: 30,
                 ..SolverParams::default()
             },
-            30,
-        )?
-        .solve(&a, &mut amg, &b, &mut x)?;
+        )?;
         println!(
             "{name:20} {:2} iterations, residual {:.3e}, converged: {}",
             report.iterations, report.relative_residual, report.converged

@@ -1,8 +1,8 @@
-//! A public choice between the simplicial and supernodal factorizations.
+//! The method choice behind the sparse LU handle.
 //!
-//! [`SymbolicLu`] and [`SymbolicSupernodal`] stay available
-//! directly; this module is the convenience layer that analyzes a pattern once
-//! and factors it with the requested method, including an automatic choice.
+//! `SparseLu` wraps `LuSymbolic`, which analyzes a pattern once and factors it
+//! with the requested method, including an automatic choice. The simplicial and
+//! supernodal analyses stay internal to the direct solver.
 //!
 //! The automatic choice uses a **flop proxy**, not a timing measurement:
 //!
@@ -18,8 +18,8 @@
 //! evidence.
 //!
 //! The supernodal factorization is still experimental: it is slower than the
-//! simplicial path on the matrices benchmarked so far, so
-//! [`LuMethod::Simplicial`] (the [`Default`]) remains the recommended choice.
+//! simplicial path on the matrices benchmarked so far, so `LuMethod::Simplicial`
+//! (the `Default`) remains the recommended choice.
 
 use crate::sparse::SparseError;
 use crate::sparse::csc::CscPattern;
@@ -68,11 +68,8 @@ impl Default for LuMethod {
 /// A symbolic analysis that can factorize with either method.
 #[derive(Clone, Debug)]
 pub struct LuSymbolic {
-    n: usize,
     nnz: usize,
-    requested: LuMethod,
     supernodal: bool,
-    flop_ratio: f64,
     simplicial: SymbolicLu,
     supernodal_symbolic: Option<SymbolicSupernodal>,
 }
@@ -117,38 +114,19 @@ impl LuSymbolic {
             LuMethod::Auto { flop_ratio_threshold } => flop_ratio > flop_ratio_threshold,
         };
         Ok(Self {
-            n: pattern.ncols(),
             nnz: pattern.nnz(),
-            requested: method,
             supernodal,
-            flop_ratio,
             simplicial,
             supernodal_symbolic: if supernodal { supernodal_symbolic } else { None },
         })
     }
 
-    /// Returns the method that was requested.
-    #[inline]
-    pub fn requested(&self) -> LuMethod {
-        self.requested
-    }
-
     /// Returns `true` if the supernodal factorization was selected.
+    // Test-only: exposed so the tests can inspect the choice.
+    #[cfg(test)]
     #[inline]
     pub fn is_supernodal(&self) -> bool {
         self.supernodal
-    }
-
-    /// Returns the flop proxy the automatic choice used.
-    #[inline]
-    pub fn flop_ratio(&self) -> f64 {
-        self.flop_ratio
-    }
-
-    /// Returns the order of the matrix.
-    #[inline]
-    pub fn n(&self) -> usize {
-        self.n
     }
 
     /// Returns the number of stored entries the analysis saw.
@@ -161,13 +139,6 @@ impl LuSymbolic {
     #[inline]
     pub fn simplicial(&self) -> &SymbolicLu {
         &self.simplicial
-    }
-
-    /// Returns the supernodal symbolic analysis, if the supernodal method was
-    /// selected.
-    #[inline]
-    pub fn supernodal(&self) -> Option<&SymbolicSupernodal> {
-        self.supernodal_symbolic.as_ref()
     }
 
     /// Factorizes `a` with the selected method.
@@ -203,12 +174,6 @@ enum LuSolverInner<T> {
 }
 
 impl<T> LuSolver<T> {
-    /// Returns `true` if the supernodal factorization produced these factors.
-    #[inline]
-    pub fn is_supernodal(&self) -> bool {
-        matches!(self.inner, LuSolverInner::Supernodal(_))
-    }
-
     /// Returns the order of the matrix.
     #[inline]
     pub fn n(&self) -> usize {
@@ -236,21 +201,21 @@ impl<T> LuSolver<T> {
         }
     }
 
-    /// Returns the simplicial factors, if that is what ran.
+    /// Returns the `L` column pointers.
     #[inline]
-    pub fn as_simplicial(&self) -> Option<&LuFactors<T>> {
+    pub(crate) fn l_col_ptr(&self) -> &[usize] {
         match &self.inner {
-            LuSolverInner::Simplicial(f) => Some(f),
-            LuSolverInner::Supernodal(_) => None,
+            LuSolverInner::Simplicial(f) => f.l_col_ptr(),
+            LuSolverInner::Supernodal(f) => f.l_col_ptr(),
         }
     }
 
-    /// Returns the supernodal factors, if that is what ran.
+    /// Returns the `U` column pointers.
     #[inline]
-    pub fn as_supernodal(&self) -> Option<&SupernodalLu<T>> {
+    pub(crate) fn u_col_ptr(&self) -> &[usize] {
         match &self.inner {
-            LuSolverInner::Simplicial(_) => None,
-            LuSolverInner::Supernodal(f) => Some(f),
+            LuSolverInner::Simplicial(f) => f.u_col_ptr(),
+            LuSolverInner::Supernodal(f) => f.u_col_ptr(),
         }
     }
 }
@@ -358,7 +323,10 @@ mod tests {
         assert!(!s.is_supernodal());
         let n = LuSymbolic::analyze(CscPattern::new(6, 6, &cp, &ri).unwrap(), LuMethod::Supernodal).unwrap();
         assert!(n.is_supernodal());
-        assert!(n.flop_ratio() > 0.0);
+        // Dense patterns have a positive flop proxy, so a zero threshold selects
+        // the supernodal path.
+        let auto = LuSymbolic::analyze(CscPattern::new(6, 6, &cp, &ri).unwrap(), LuMethod::Auto { flop_ratio_threshold: 0.0 }).unwrap();
+        assert!(auto.is_supernodal());
     }
 
     #[test]

@@ -95,18 +95,6 @@ impl ColamdOrdering {
     pub fn perm_inv(&self) -> &[usize] {
         &self.perm_inv
     }
-
-    /// Returns the length of the permutation.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.perm.len()
-    }
-
-    /// Returns `true` if the ordering is empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.perm.is_empty()
-    }
 }
 
 /// One column's state, following faer's `ColamdCol`.
@@ -947,7 +935,7 @@ mod tests {
     #[test]
     fn empty_and_singleton() {
         let o = order(0, &[0], &[]);
-        assert!(o.is_empty());
+        assert!(o.perm().is_empty());
 
         let o = order(1, &[0, 1], &[0]);
         assert_eq!(o.perm(), &[0]);

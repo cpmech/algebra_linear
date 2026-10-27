@@ -146,18 +146,6 @@ impl<'a, T> CscView<'a, T> {
         self.pattern
     }
 
-    /// Returns the number of rows.
-    #[inline]
-    pub fn nrows(&self) -> usize {
-        self.pattern.nrows()
-    }
-
-    /// Returns the number of columns.
-    #[inline]
-    pub fn ncols(&self) -> usize {
-        self.pattern.ncols()
-    }
-
     /// Returns the number of stored entries.
     #[inline]
     pub fn nnz(&self) -> usize {

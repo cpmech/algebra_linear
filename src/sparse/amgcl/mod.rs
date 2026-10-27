@@ -7,27 +7,37 @@
 //! dense coarse LU, preconditioned CG/BiCGStab/GMRES, and optional safe
 //! shared-memory execution using standard-library scoped threads.
 //!
-//! AMGCL consumes compressed sparse row (CSR) matrices directly. The module
-//! does not convert between CSR and the CSC format used by the sparse LU
-//! solvers; callers provide the format required by their selected solver.
+//! AMGCL consumes compressed sparse row (CSR) arrays directly. The module does
+//! not convert between CSR and the CSC format used by the sparse LU solvers;
+//! callers provide the format required by their selected solver.
+//! [`amg_setup`] takes the CSR arrays and returns an opaque [`Amg`]; passing
+//! `None` for its parameters stores the matrix only and applies as the identity
+//! preconditioner. [`krylov_solve`] solves the stored system.
 //!
 //! ```
-//! use algebra_linear::sparse::amgcl::{Amg, AmgParams, Cg, CsrMatrix, SolverParams};
+//! use algebra_linear::sparse::amgcl::{amg_setup, krylov_solve, AmgParams, KrylovMethod, SolverParams};
 //!
-//! # fn main() -> Result<(), algebra_linear::sparse::amgcl::Error> {
-//! let a = CsrMatrix::poisson_2d(16, 16)?;
-//! let b = vec![1.0; a.nrows()];
-//! let mut x = vec![0.0; a.nrows()];
-//! let mut amg = Amg::new(&a, AmgParams::default())?;
-//! let solver = Cg::new(SolverParams {
-//!     tolerance: 1e-10,
-//!     max_iterations: 100,
-//!     ..SolverParams::default()
-//! });
-//! let report = solver.solve(&a, &mut amg, &b, &mut x)?;
+//! // The 1-D Laplacian on three unknowns, A = tridiag(-1, 4, -1), in CSR form.
+//! let row_ptr = [0, 2, 5, 7];
+//! let col_idx = [0, 1, 0, 1, 2, 1, 2];
+//! let values = [4.0, -1.0, -1.0, 4.0, -1.0, -1.0, 4.0];
+//!
+//! let mut amg = amg_setup(&row_ptr, &col_idx, &values, Some(AmgParams::default())).unwrap();
+//! let b = [1.0, 2.0, 3.0];
+//! let mut x = [0.0; 3];
+//! let report = krylov_solve(
+//!     KrylovMethod::Cg,
+//!     &mut amg,
+//!     &b,
+//!     &mut x,
+//!     SolverParams {
+//!         tolerance: 1e-12,
+//!         max_iterations: 20,
+//!         ..SolverParams::default()
+//!     },
+//! )
+//! .unwrap();
 //! assert!(report.converged);
-//! # Ok(())
-//! # }
 //! ```
 #![forbid(unsafe_code)]
 
@@ -44,11 +54,9 @@ mod solver;
 mod tests;
 mod vector;
 
-pub use amg::{Amg, AmgParams, LevelInfo};
+pub use amg::{Amg, AmgParams, LevelInfo, amg_setup};
 pub use coarsening::{AggregationParams, Coarsening, CoarseningParams, PlainAggregationParams, SmoothedAggregationParams};
 pub use error::{Error, Result};
-pub use matrix::{CsrMatrix, CsrRow};
 pub use parallel::Parallelism;
-pub use preconditioner::{Identity, Preconditioner};
 pub use relaxation::{ChebyshevParams, Ilu0Params, Smoother};
-pub use solver::{BiCgStab, Cg, Gmres, SolveReport, SolverParams};
+pub use solver::{KrylovMethod, SolveReport, SolverParams, krylov_solve};

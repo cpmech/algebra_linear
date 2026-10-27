@@ -116,24 +116,6 @@ impl CsrMatrix {
         )
     }
 
-    /// Converts a row-major dense matrix to CSR, omitting exact zeros.
-    pub fn from_dense(nrows: usize, ncols: usize, dense: &[f64]) -> Result<Self> {
-        if dense.len() != nrows.saturating_mul(ncols) {
-            return Err(Error::DimensionMismatch {
-                expected: nrows.saturating_mul(ncols),
-                actual: dense.len(),
-                context: "dense matrix conversion",
-            });
-        }
-        let triplets = (0..nrows).flat_map(|row| {
-            (0..ncols).filter_map(move |column| {
-                let value = dense[row * ncols + column];
-                (value != 0.0).then_some((row, column, value))
-            })
-        });
-        Self::from_triplets(nrows, ncols, triplets)
-    }
-
     /// Number of rows.
     #[inline]
     pub fn nrows(&self) -> usize {
@@ -212,11 +194,15 @@ impl CsrMatrix {
     }
 
     /// Computes `y = A * x` serially.
+    // Test-only: the solvers call the unchecked kernels directly.
+    #[cfg(test)]
     pub fn spmv(&self, x: &[f64], y: &mut [f64]) -> Result<()> {
         self.spmv_with(x, y, Parallelism::default())
     }
 
     /// Computes `y = A * x` with the selected shared-memory configuration.
+    // Test-only: the solvers call the unchecked kernels directly.
+    #[cfg(test)]
     pub fn spmv_with(&self, x: &[f64], y: &mut [f64], params: Parallelism) -> Result<()> {
         params.validate()?;
         self.check_vector(x.len(), self.ncols, "SpMV input")?;
@@ -226,11 +212,15 @@ impl CsrMatrix {
     }
 
     /// Computes `y += A * x` serially.
+    // Test-only: the solvers call the unchecked kernels directly.
+    #[cfg(test)]
     pub fn spmv_add(&self, x: &[f64], y: &mut [f64]) -> Result<()> {
         self.spmv_add_with(x, y, Parallelism::default())
     }
 
     /// Computes `y += A * x` with the selected shared-memory configuration.
+    // Test-only: the solvers call the unchecked kernels directly.
+    #[cfg(test)]
     pub fn spmv_add_with(&self, x: &[f64], y: &mut [f64], params: Parallelism) -> Result<()> {
         params.validate()?;
         self.check_vector(x.len(), self.ncols, "SpMV input")?;
@@ -240,11 +230,15 @@ impl CsrMatrix {
     }
 
     /// Computes `r = rhs - A * x` serially.
+    // Test-only: the solvers call the unchecked kernel directly.
+    #[cfg(test)]
     pub fn residual(&self, rhs: &[f64], x: &[f64], r: &mut [f64]) -> Result<()> {
         self.residual_with(rhs, x, r, Parallelism::default())
     }
 
     /// Computes `r = rhs - A * x` with the selected shared-memory configuration.
+    // Test-only: the solvers call the unchecked kernel directly.
+    #[cfg(test)]
     pub fn residual_with(&self, rhs: &[f64], x: &[f64], r: &mut [f64], params: Parallelism) -> Result<()> {
         params.validate()?;
         self.check_vector(x.len(), self.ncols, "residual solution")?;
@@ -324,6 +318,8 @@ impl CsrMatrix {
     }
 
     /// Sparse matrix product `self * rhs` using serial per-row accumulators.
+    // Test-only: the setup uses the explicit-parallelism variant.
+    #[cfg(test)]
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         self.matmul_with(rhs, Parallelism::default())
     }
@@ -388,6 +384,8 @@ impl CsrMatrix {
     }
 
     /// Row-major dense representation, primarily for tests and small systems.
+    // Test-only: a diagnostic view used to check the sparse kernels against dense expectations.
+    #[cfg(test)]
     pub fn to_dense(&self) -> Vec<f64> {
         let mut dense = vec![0.0; self.nrows * self.ncols];
         for row in 0..self.nrows {
@@ -400,6 +398,8 @@ impl CsrMatrix {
 
     /// Five-point finite-difference Laplacian on an `nx` by `ny` grid.
     /// Boundary conditions are Dirichlet and the grid spacing is omitted.
+    // Test-only: callers now assemble their own CSR arrays.
+    #[cfg(test)]
     pub fn poisson_2d(nx: usize, ny: usize) -> Result<Self> {
         if nx == 0 || ny == 0 {
             return Err(Error::InvalidParameter("Poisson grid dimensions must be positive".into()));
@@ -429,6 +429,8 @@ impl CsrMatrix {
         Self::from_triplets(n, n, triplets)
     }
 
+    // Test-only: the checked wrappers that call it are test-only.
+    #[cfg(test)]
     fn check_vector(&self, actual: usize, expected: usize, context: &'static str) -> Result<()> {
         if actual == expected {
             Ok(())

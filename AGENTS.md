@@ -218,7 +218,7 @@ otherwise the next person spends a day rediscovering why a file sits below the b
 | `src/blas.rs` | one skipped-column arm (`zgemv` with a zero scalar) and the argument lines of two assertion messages |
 | `src/sparse/ordering/colamd.rs` | the garbage-collection and super-column repair arms are reached only by fill patterns larger than the fixtures; `SparseError::IndexOverflow` is unreachable at test sizes |
 | `src/sparse/supernodal/lu.rs` | the L/U diagonal-structure guards are drop-invariant checks: a correct supernode partition cannot reach them |
-| `src/sparse/mod.rs`, `src/sparse/solver.rs`, `src/sparse/csc.rs`, `src/sparse/lu.rs` | accessor bodies and the `SparseError` `Display` arms that no test calls; they are not refusal arms |
+| `src/sparse/solver.rs`, `src/sparse/csc.rs`, `src/sparse/lu.rs` | accessor bodies that no test calls; they are not refusal arms |
 
 So the remainder is rescue and refusal code, by design: a correct routine cannot
 reach the arms whose job is to reject bad input or survive an iteration that gave

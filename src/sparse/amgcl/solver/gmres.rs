@@ -1,7 +1,8 @@
 use super::{Problem, SolveReport, SolverParams, prepare, report};
+use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::preconditioner::Preconditioner;
 use crate::sparse::amgcl::vector::{axpy_with, check_finite_with, dot_with, norm_with, set_scaled_with};
-use crate::sparse::amgcl::{CsrMatrix, Error, Result};
+use crate::sparse::amgcl::{Error, Result};
 
 /// Right-preconditioned restarted GMRES with modified Gram–Schmidt orthogonalization.
 #[derive(Clone, Copy, Debug)]

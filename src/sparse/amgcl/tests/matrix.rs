@@ -1,4 +1,5 @@
-use crate::sparse::amgcl::{CsrMatrix, Error};
+use crate::sparse::amgcl::Error;
+use crate::sparse::amgcl::matrix::CsrMatrix;
 
 #[test]
 fn triplets_are_sorted_combined_and_zero_filtered() {
@@ -19,6 +20,14 @@ fn spmv_transpose_and_product_match_dense_results() {
     assert_eq!(transpose.to_dense(), vec![1.0, 0.0, 0.0, -1.0, 2.0, 4.0]);
     let gram = transpose.matmul(&a).unwrap();
     assert_eq!(gram.to_dense(), vec![1.0, 0.0, 2.0, 0.0, 1.0, -4.0, 2.0, -4.0, 20.0]);
+}
+
+#[test]
+fn spmv_add_accumulates_into_the_output() {
+    let a = CsrMatrix::from_triplets(2, 2, [(0, 0, 1.0), (0, 1, 2.0), (1, 0, 3.0), (1, 1, 4.0)]).unwrap();
+    let mut y = vec![1.0, -1.0];
+    a.spmv_add(&[1.0, 2.0], &mut y).unwrap();
+    assert_eq!(y, vec![6.0, 10.0]);
 }
 
 #[test]

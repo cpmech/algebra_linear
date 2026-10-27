@@ -27,7 +27,6 @@ use crate::sparse::supernodal::SymbolicSupernodal;
 #[derive(Clone, Debug)]
 pub struct SupernodalLu<T> {
     n: usize,
-    n_supernodes: usize,
     l_col_ptr: Vec<usize>,
     l_row_idx: Vec<usize>,
     l_val: Vec<T>,
@@ -35,22 +34,14 @@ pub struct SupernodalLu<T> {
     u_row_idx: Vec<usize>,
     u_val: Vec<T>,
     row_perm: Vec<usize>,
-    row_perm_inv: Vec<usize>,
-    col_perm: Vec<usize>,
     col_perm_inv: Vec<usize>,
 }
 
 impl<T> SupernodalLu<T> {
     /// Returns the order of the matrix.
     #[inline]
-    pub fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.n
-    }
-
-    /// Returns the number of supernodes.
-    #[inline]
-    pub fn n_supernodes(&self) -> usize {
-        self.n_supernodes
     }
 
     /// Returns the `L` column pointers.
@@ -60,12 +51,16 @@ impl<T> SupernodalLu<T> {
     }
 
     /// Returns the `L` row indices (positions).
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn l_row_idx(&self) -> &[usize] {
         &self.l_row_idx
     }
 
     /// Returns the `L` values.
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn l_values(&self) -> &[T] {
         &self.l_val
@@ -78,12 +73,16 @@ impl<T> SupernodalLu<T> {
     }
 
     /// Returns the `U` row indices (positions).
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn u_row_idx(&self) -> &[usize] {
         &self.u_row_idx
     }
 
     /// Returns the `U` values.
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn u_values(&self) -> &[T] {
         &self.u_val
@@ -102,27 +101,11 @@ impl<T> SupernodalLu<T> {
     }
 
     /// Returns the row permutation (position to original row).
+    // Test-only: exposed so the tests can inspect the factors.
+    #[cfg(test)]
     #[inline]
     pub fn row_perm(&self) -> &[usize] {
         &self.row_perm
-    }
-
-    /// Returns the inverse row permutation.
-    #[inline]
-    pub fn row_perm_inv(&self) -> &[usize] {
-        &self.row_perm_inv
-    }
-
-    /// Returns the column permutation (new position to original column).
-    #[inline]
-    pub fn col_perm(&self) -> &[usize] {
-        &self.col_perm
-    }
-
-    /// Returns the inverse column permutation.
-    #[inline]
-    pub fn col_perm_inv(&self) -> &[usize] {
-        &self.col_perm_inv
     }
 }
 
@@ -485,7 +468,6 @@ impl SymbolicSupernodal {
 
         Ok(SupernodalLu {
             n,
-            n_supernodes: ns,
             l_col_ptr,
             l_row_idx,
             l_val,
@@ -493,8 +475,6 @@ impl SymbolicSupernodal {
             u_row_idx,
             u_val,
             row_perm,
-            row_perm_inv,
-            col_perm: self.col_perm.clone(),
             col_perm_inv: self.col_perm_inv.clone(),
         })
     }
@@ -544,7 +524,8 @@ fn lu_front<T: SparseScalar>(a: &mut [T], nrows: usize, nfactor: usize, ncols: u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sparse::{CscPattern, SymbolicLu};
+    use crate::sparse::csc::CscPattern;
+    use crate::sparse::symbolic::SymbolicLu;
 
     fn from_cols(_n: usize, cols: &[&[usize]]) -> (Vec<usize>, Vec<usize>) {
         let mut col_ptr = vec![0];
@@ -741,7 +722,7 @@ mod tests {
                         sum += l[i + k * n] * u[k + j * n];
                     }
                     let r = f.row_perm()[i];
-                    let c = f.col_perm()[j];
+                    let c = symbolic.col_perm[j];
                     assert!((sum - a[r + c * n]).abs() < 1e-10, "({i},{j})");
                 }
             }

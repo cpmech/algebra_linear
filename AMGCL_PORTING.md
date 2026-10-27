@@ -17,12 +17,13 @@ included.
 
 ## Sparse format contract
 
-AMGCL accepts owned compressed sparse row (`CsrMatrix`) input. Existing sparse
-LU solvers continue to accept borrowed compressed sparse column (`CscView`)
-input. There is deliberately no CSC-to-CSR or CSR-to-CSC adapter: the caller
-provides the format required by the selected solver. CSR is a row-oriented
-sparse representation and does not change the crate's column-major dense-matrix
-convention.
+AMGCL accepts raw compressed sparse row (CSR) arrays through
+`amg_setup(row_ptr, col_idx, values, params)`, which copies and validates them
+into the internal `CsrMatrix`. Existing sparse LU solvers accept caller-owned
+compressed sparse column (CSC) arrays through `SparseLu`. There is deliberately
+no CSC-to-CSR or CSR-to-CSC adapter: the caller provides the format required by
+the selected solver. CSR is a row-oriented sparse representation and does not
+change the crate's column-major dense-matrix convention.
 
 The only dense conversion in the AMG setup transforms the small coarse CSR
 operator into column-major dense storage for the shared LAPACK LU implementation.
@@ -55,11 +56,15 @@ operator into column-major dense storage for the shared LAPACK LU implementation
 ## Intentional API differences
 
 AMGCL is header-only C++ with compile-time backends and value types. This module
-exposes concrete owned `CsrMatrix` and `Amg` types and a Rust `Preconditioner`
-trait. Configuration uses plain Rust structs rather than Boost property trees.
-The module retains its detailed `Error` type so invalid matrices, dimensions,
-parameters, singular pivots, non-finite arithmetic, and Krylov breakdowns remain
-distinguishable.
+has an array-based public API: `amg_setup` takes the CSR arrays and returns an
+opaque `Amg`, and `krylov_solve` takes the method, the `Amg` state, the
+right-hand side, and the solution. `CsrMatrix`, `CsrRow`, the Krylov solver
+types, and the `Preconditioner` trait are internal. The identity preconditioner
+is `amg_setup(..., None)`, whose matrix-only state copies the right-hand side to
+the solution. Configuration uses plain Rust structs rather than Boost property
+trees. The module retains its detailed `Error` type so invalid matrices,
+dimensions, parameters, singular pivots, non-finite arithmetic, and Krylov
+breakdowns remain distinguishable.
 
 AMG owns its scratch space; mutability avoids hidden shared workspaces and avoids
 allocation during serial cycles. `Parallelism` is configured independently on
