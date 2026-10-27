@@ -46,3 +46,39 @@ impl std::error::Error for Error {}
 
 /// Result type used throughout the crate.
 pub type Result<T> = core::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_messages_are_exact() {
+        let cases = [
+            (Error::InvalidMatrix(String::from("ragged CSR")), "invalid matrix: ragged CSR"),
+            (
+                Error::InvalidParameter(String::from("negative tolerance")),
+                "invalid parameter: negative tolerance",
+            ),
+            (
+                Error::DimensionMismatch {
+                    expected: 7,
+                    actual: 5,
+                    context: "krylov_solve",
+                },
+                "dimension mismatch in krylov_solve: expected 7, got 5",
+            ),
+            (Error::SingularMatrix { row: 4 }, "matrix is numerically singular at row 4"),
+            (Error::SolverBreakdown("zero denominator"), "solver breakdown: zero denominator"),
+            (Error::NonFinite, "computation produced a non-finite value"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn usable_through_std_error() {
+        let error: &dyn std::error::Error = &Error::NonFinite;
+        assert!(!error.to_string().is_empty());
+    }
+}

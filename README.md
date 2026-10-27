@@ -14,8 +14,8 @@ target, including `wasm32-unknown-unknown`.
 |---|---|
 | `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, `dtrsv` (+transpose), `dtrsm`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `ztrsv` (+transpose), `ztrsm`, `dznrm2` |
 | `lapack` | drivers: `dgesv`, `dgetrf`, `dgetrf_rect` (the `nrows x ncols` panel), `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetrf_rect`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
-| `sparse` | a simplicial* sparse LU (`CscView`, `SymbolicLu`, `LuFactors`) and a supernodal* one (`SymbolicSupernodal`, `SupernodalLu`) in CSC form, with real and complex scalars, plus the ported COLAMD ordering; `LuSymbolic`/`LuMethod` choose between the methods [*ported from faer -- see also reference #1](https://codeberg.org/sarah-quinones/faer) |
-| `sparse::amgcl` | real `f64` CSR matrices, classical Ruge–Stüben and aggregation-based AMG, Gauss–Seidel, damped Jacobi, ILU(0), Chebyshev, SPAI(0/1), AMG-preconditioned CG, BiCGStab, restarted GMRES, and optional native scoped-thread parallelism |
+| `sparse` | `SparseLu`, an opaque sparse LU over caller-owned CSC arrays, with `LuMethod` choosing the simplicial or supernodal factorization, `SparseLuStats` reporting structure, cost and timing, real (`f64`) and complex (`Complex64`) scalars, and the ported COLAMD ordering [*ported from faer -- see also reference #1](https://codeberg.org/sarah-quinones/faer) |
+| `sparse::amgcl` | array-based entry points `amg_setup(row_ptr, col_idx, values, params)` and `krylov_solve(method, &mut amg, rhs, x, params)` for real `f64` CSR arrays, classical Ruge–Stüben and aggregation-based AMG, Gauss–Seidel, damped Jacobi, ILU(0), Chebyshev, SPAI(0/1), AMG-preconditioned CG, BiCGStab, restarted GMRES, and optional native scoped-thread parallelism |
 
 Not every BLAS or LAPACK routine is here: the port covers the drivers a dense
 linear-algebra caller needs, sparse LU with a COLAMD ordering, and the core CPU
@@ -38,26 +38,34 @@ AMGCL algorithms. Each function names the reference source it follows (for examp
 
 ## AMG and Krylov solvers
 
-The `sparse::amgcl` module accepts user-supplied CSR matrices directly. This
-example builds a two-dimensional Poisson matrix and solves it with
-AMG-preconditioned CG:
+The `sparse::amgcl` module accepts raw compressed sparse row (CSR) arrays. This
+example builds the one-dimensional Laplacian `tridiag(-1, 4, -1)` on three
+unknowns and solves it with AMG-preconditioned CG:
 
 ```rust
-use algebra_linear::sparse::amgcl::{Amg, AmgParams, Cg, CsrMatrix, SolverParams};
+use algebra_linear::sparse::amgcl::{AmgParams, KrylovMethod, SolverParams, amg_setup, krylov_solve};
 
 fn main() -> Result<(), algebra_linear::sparse::amgcl::Error> {
-    let a = CsrMatrix::poisson_2d(32, 32)?;
-    let b = vec![1.0; a.nrows()];
-    let mut x = vec![0.0; a.nrows()];
-    let mut amg = Amg::new(&a, AmgParams::default())?;
-    let cg = Cg::new(SolverParams {
-        tolerance: 1e-10,
-        max_iterations: 100,
-        ..SolverParams::default()
-    });
-    let report = cg.solve(&a, &mut amg, &b, &mut x)?;
+    let row_ptr = [0, 2, 5, 7];
+    let col_idx = [0, 1, 0, 1, 2, 1, 2];
+    let values = [4.0, -1.0, -1.0, 4.0, -1.0, -1.0, 4.0];
+
+    let mut amg = amg_setup(&row_ptr, &col_idx, &values, Some(AmgParams::default()))?;
+    let b = [1.0, 2.0, 3.0];
+    let mut x = [0.0; 3];
+    let report = krylov_solve(
+        KrylovMethod::Cg,
+        &mut amg,
+        &b,
+        &mut x,
+        SolverParams {
+            tolerance: 1e-10,
+            max_iterations: 100,
+            ..SolverParams::default()
+        },
+    )?;
     assert!(report.converged);
-    println!("{} iterations", report.iterations);
+    println!("{} iterations, x = {x:?}", report.iterations);
     Ok(())
 }
 ```
@@ -85,7 +93,7 @@ vectors, and upstream C++ API compatibility are outside its scope. See
 
 ## Performance
 
-The `Native` solver of [`russell_sparse`](https://crates.io/crates/russell_sparse) uses the sparse LU from this crate. The table below compares it with UMFPACK on the benchmark matrices that completed; the data is from [benchmark-russell](https://github.com/cpmech/benchmark-russell).
+The `Native` solver of [`russell_sparse`](https://crates.io/crates/russell_sparse) 4.x uses the sparse LU from this crate. The table below compares it with UMFPACK on the benchmark matrices that completed; the data is from [benchmark-russell](https://github.com/cpmech/benchmark-russell). `russell_sparse` 5.0 renames that same solver `Direct`.
 
 | Matrix | NROW | NNZ | Native | UMFPACK | UMFPACK / Native |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -99,7 +107,7 @@ The `Native` solver of [`russell_sparse`](https://crates.io/crates/russell_spars
 
 `(c)` marks a complex-valued matrix; rows are sorted by NNZ. **NNZ is the matrix-file non-zero count.** Times are five-run averages from the benchmark on the benchmark machine (Arch Linux, Intel Core i9-13900KF).
 
-The Native solver is fast on small systems: up to about 30,000 non-zeros it takes at most a few tens of milliseconds. It becomes very slow for matrices with more than **1 million** non-zeros: the `xenon1` case (NROW=48,600, 1,181,120 non-zeros) takes **55 s**, and the next real case (`twotone`, NROW=120,750, 1,224,224 non-zeros) did not finish within the 3-minute probe. For matrices with more than **1 million** non-zeros, expect **nearly a minute** or more.
+That 4.x `Native` solver is fast on small systems: up to about 30,000 non-zeros it takes at most a few tens of milliseconds. It becomes very slow for matrices with more than **1 million** non-zeros: the `xenon1` case (NROW=48,600, 1,181,120 non-zeros) takes **55 s**, and the next real case (`twotone`, NROW=120,750, 1,224,224 non-zeros) did not finish within the 3-minute probe. For matrices with more than **1 million** non-zeros, expect **nearly a minute** or more.
 
 The threshold is not a function of NNZ alone. The complex `mplate` (NROW=5,962, 142,190 non-zeros) takes **3.13 s**, and `RFdevice` (NROW=74,104, 365,580 non-zeros) did not finish in **15 minutes**; sparsity structure and numerical type matter as much as the non-zero count.
 

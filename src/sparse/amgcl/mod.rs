@@ -7,9 +7,9 @@
 //! dense coarse LU, preconditioned CG/BiCGStab/GMRES, and optional safe
 //! shared-memory execution using standard-library scoped threads.
 //!
-//! AMGCL consumes compressed sparse row (CSR) matrices directly. The module
-//! does not convert between CSR and the CSC format used by the sparse LU
-//! solvers; callers provide the format required by their selected solver.
+//! AMGCL consumes compressed sparse row (CSR) arrays directly. The module does
+//! not convert between CSR and the CSC format used by the sparse LU solvers;
+//! callers provide the format required by their selected solver.
 //! [`amg_setup`] takes the CSR arrays and returns an opaque [`Amg`]; passing
 //! `None` for its parameters stores the matrix only and applies as the identity
 //! preconditioner. [`krylov_solve`] solves the stored system.

@@ -5,7 +5,7 @@
 //! ordering reduces fill, [`LuMethod`] chooses a simplicial or supernodal
 //! factorization, and [`SparseLuStats`] reports the structure, cost and timing.
 //! The [`amgcl`] submodule provides algebraic multigrid and preconditioned
-//! Krylov solvers for compressed sparse row (CSR) matrices.
+//! Krylov solvers for compressed sparse row (CSR) arrays.
 //!
 //! # Provenance
 //!
@@ -68,11 +68,7 @@ pub use sparse_lu::SparseLu;
 pub use stats::SparseLuStats;
 
 /// Errors reported by the sparse routines.
-///
-/// The enum is non-exhaustive: it is expected to gain variants as the module
-/// grows, and a caller should not match it exhaustively.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum SparseError {
     /// A shape or length was inconsistent with another.
     BadShape,
@@ -112,3 +108,32 @@ impl core::fmt::Display for SparseError {
 }
 
 impl std::error::Error for SparseError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_messages_are_exact() {
+        let cases = [
+            (SparseError::BadShape, "inconsistent shape or length"),
+            (SparseError::InvalidStructure, "invalid CSC structure"),
+            (SparseError::UnsortedRows, "row indices must be strictly increasing within a column"),
+            (SparseError::DuplicateEntry, "duplicate entry in a column"),
+            (SparseError::Singular, "the matrix is singular"),
+            (SparseError::IndexOverflow, "index or workspace size overflow"),
+            (SparseError::StructureMismatch, "the matrix pattern differs from the symbolic analysis"),
+            (SparseError::NotFinite, "the matrix has a NaN or infinite entry"),
+            (SparseError::NotFactorized, "the matrix has not been factorized"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn usable_through_std_error() {
+        let error: &dyn std::error::Error = &SparseError::BadShape;
+        assert!(!error.to_string().is_empty());
+    }
+}
