@@ -96,7 +96,7 @@ struct Level {
 
 impl Level {
     fn new(
-        a: CsrMatrix,
+        a: Arc<CsrMatrix>,
         p: Option<CsrMatrix>,
         r: Option<CsrMatrix>,
         coarse: Option<DenseLu>,
@@ -106,13 +106,13 @@ impl Level {
         let n = a.nrows();
         let needs_smoother = coarse.is_none() || p.is_some();
         let relaxation = if needs_smoother {
-            Some(Relaxation::new_with(&a, smoother, parallel)?)
+            Some(Relaxation::new_with(a.as_ref(), smoother, parallel)?)
         } else {
             None
         };
         let coarse_size = p.as_ref().map_or(0, CsrMatrix::ncols);
         Ok(Self {
-            a: Arc::new(a),
+            a,
             p,
             r,
             relaxation,
@@ -124,9 +124,9 @@ impl Level {
     }
 
     /// A single level with no relaxation and no coarse factorization.
-    fn matrix_only(a: CsrMatrix) -> Self {
+    fn matrix_only(a: Arc<CsrMatrix>) -> Self {
         Self {
-            a: Arc::new(a),
+            a,
             p: None,
             r: None,
             relaxation: None,
@@ -156,7 +156,13 @@ impl Level {
 pub struct Amg {
     /// `None` is matrix-only state: the finest matrix with no relaxation.
     params: Option<AmgParams>,
+    /// The hierarchy, from the finest level to the coarsest.
     levels: Vec<Level>,
+    /// The matrix the caller handed in
+    ///
+    /// The levels may carry a copy with a null diagonal filled in, because a smoother cannot divide
+    /// by zero; the system that is solved and whose residual the Krylov method measures is this one.
+    original: Arc<CsrMatrix>,
 }
 
 /// Builds AMG state from raw compressed sparse row (CSR) arrays.
@@ -197,12 +203,13 @@ impl Amg {
         params.validate()?;
 
         let mut levels = Vec::new();
-        // The hierarchy's own operators must carry a diagonal: every smoother divides by it and the
-        // prolongator weights use it, so a row whose diagonal is exactly zero stops the setup with a
-        // "numerically singular" error. A null row is a legitimate input (a structural matrix with a
-        // degree-zero node, an eliminated equation), so the preconditioner gets a unit diagonal
-        // there: that unknown is left to the Krylov iteration, which always sees the true matrix.
-        let mut current = Self::ensure_nonzero_diagonal(matrix)?;
+        // The caller's matrix is the system the Krylov method solves and measures; the hierarchy below
+        // may carry a copy with a null diagonal filled in, because a smoother cannot divide by zero.
+        let original = Arc::new(matrix);
+        let mut current = match Self::ensure_nonzero_diagonal(&original)? {
+            Some(filled) => Arc::new(filled),
+            None => Arc::clone(&original),
+        };
         let mut coarsening = params.coarsening;
         loop {
             let n = current.nrows();
@@ -217,14 +224,21 @@ impl Amg {
                     if coarse_matrix.values().iter().any(|v| !v.is_finite()) {
                         return Err(Error::NonFinite);
                     }
-                    levels.push(Level::new(current, Some(p), Some(r), None, params.smoother, params.parallelism)?);
+                    levels.push(Level::new(
+                        Arc::clone(&current),
+                        Some(p),
+                        Some(r),
+                        None,
+                        params.smoother,
+                        params.parallelism,
+                    )?);
                     // AMGCL weakens the strength threshold on successive
                     // smoothed-aggregation levels to control operator growth.
                     if let Coarsening::SmoothedAggregation(mut aggregation) = coarsening {
                         aggregation.aggregation.eps_strong *= 0.5;
                         coarsening = Coarsening::SmoothedAggregation(aggregation);
                     }
-                    current = coarse_matrix;
+                    current = Arc::new(coarse_matrix);
                     continue;
                 }
             }
@@ -241,6 +255,7 @@ impl Amg {
         Ok(Self {
             params: Some(params),
             levels,
+            original,
         })
     }
 
@@ -250,12 +265,12 @@ impl Amg {
     /// so replacing a zero diagonal by one only changes the preconditioner, and it turns a hard setup
     /// failure into an unknown the smoother simply cannot help with. Matrices that already have a full
     /// diagonal are returned untouched.
-    fn ensure_nonzero_diagonal(a: CsrMatrix) -> Result<CsrMatrix> {
+    fn ensure_nonzero_diagonal(a: &CsrMatrix) -> Result<Option<CsrMatrix>> {
         let n = a.nrows();
         let diagonal = a.diagonal()?;
         let missing: Vec<usize> = (0..n).filter(|&i| diagonal[i] == 0.0).collect();
         if missing.is_empty() {
-            return Ok(a);
+            return Ok(None);
         }
         let mut triplets: Vec<(usize, usize, f64)> = Vec::with_capacity(a.values().len() + missing.len());
         for row in 0..n {
@@ -269,20 +284,22 @@ impl Amg {
         for i in missing {
             triplets.push((i, i, 1.0));
         }
-        CsrMatrix::from_triplets(n, n, triplets)
+        Ok(Some(CsrMatrix::from_triplets(n, n, triplets)?))
     }
 
     /// Matrix-only state: the finest matrix and nothing else.
     fn matrix_only(matrix: CsrMatrix) -> Self {
+        let original = Arc::new(matrix);
         Self {
             params: None,
-            levels: vec![Level::matrix_only(matrix)],
+            levels: vec![Level::matrix_only(Arc::clone(&original))],
+            original,
         }
     }
 
-    /// Returns a handle to the level-0 matrix.
+    /// Returns a handle to the caller's matrix, which is the one the solve measures
     pub(crate) fn matrix_handle(&self) -> Arc<CsrMatrix> {
-        Arc::clone(&self.levels[0].a)
+        Arc::clone(&self.original)
     }
 
     /// Applies the configured number of cycles after clearing `x`.
