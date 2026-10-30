@@ -509,12 +509,23 @@ fn lu_front<T: SparseScalar>(a: &mut [T], nrows: usize, nfactor: usize, ncols: u
         ipiv[k] = pivot;
         let d = a[k + k * nrows];
         let d_inv = d.recip();
+        // The front is column-major, so a column is contiguous and a row is not: the elimination must
+        // run over the columns outermost and down each column innermost, which keeps both operands of
+        // every update in one sequential run (and lets the vectorizer see it). Row k and column k are
+        // fixed for this step, so swapping the loops is exact -- the same products, in the same order
+        // per element, with no reassociation of any sum.
         for i in k + 1..nrows {
             let factor = a[i + k * nrows] * d_inv;
             a[i + k * nrows] = factor;
-            for j in k + 1..ncols {
-                let t = a[k + j * nrows] * factor;
-                a[i + j * nrows] -= t;
+        }
+        for j in k + 1..ncols {
+            let akj = a[k + j * nrows];
+            // column j comes after column k, so one split gives both halves without unsafe
+            let (head, tail) = a.split_at_mut(j * nrows);
+            let col = &mut tail[..nrows];
+            let pivot_col = &head[k * nrows..k * nrows + nrows];
+            for i in k + 1..nrows {
+                col[i] -= akj * pivot_col[i];
             }
         }
     }
