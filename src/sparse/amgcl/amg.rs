@@ -18,7 +18,10 @@ pub struct AmgParams {
     pub smoother: Smoother,
     /// Directly solve levels with at most this many rows.
     pub coarse_enough: usize,
-    /// Use dense partial-pivoted LU on a sufficiently small coarsest level.
+    /// Use dense partial-pivoted LU on a sufficiently small coarsest level
+    ///
+    /// When the coarsest operator is singular, the factorization is retried with a small diagonal
+    /// shift; if it still does not factor, the level relaxes instead of solving.
     pub direct_coarse: bool,
     /// Maximum number of levels, including the finest and coarsest.
     pub max_levels: usize,
@@ -194,7 +197,12 @@ impl Amg {
         params.validate()?;
 
         let mut levels = Vec::new();
-        let mut current = matrix;
+        // The hierarchy's own operators must carry a diagonal: every smoother divides by it and the
+        // prolongator weights use it, so a row whose diagonal is exactly zero stops the setup with a
+        // "numerically singular" error. A null row is a legitimate input (a structural matrix with a
+        // degree-zero node, an eliminated equation), so the preconditioner gets a unit diagonal
+        // there: that unknown is left to the Krylov iteration, which always sees the true matrix.
+        let mut current = Self::ensure_nonzero_diagonal(matrix)?;
         let mut coarsening = params.coarsening;
         loop {
             let n = current.nrows();
@@ -222,7 +230,11 @@ impl Amg {
             }
 
             let use_direct = params.direct_coarse && n <= params.coarse_enough;
-            let coarse = if use_direct { Some(DenseLu::new(&current)?) } else { None };
+            // A coarsest operator that cannot be factorized is not fatal: the level then relaxes
+            // instead of solving, which is the standard alternative in AMG and keeps a hierarchy
+            // whose Galerkin product came out semi-definite usable. `LevelInfo::direct_solver`
+            // reports which one a level got.
+            let coarse = if use_direct { DenseLu::new(&current).ok() } else { None };
             levels.push(Level::new(current, None, None, coarse, params.smoother, params.parallelism)?);
             break;
         }
@@ -230,6 +242,34 @@ impl Amg {
             params: Some(params),
             levels,
         })
+    }
+
+    /// Returns the matrix with a unit diagonal wherever the diagonal is exactly zero
+    ///
+    /// The hierarchy never solves the system itself -- the Krylov method does, on the caller's matrix --
+    /// so replacing a zero diagonal by one only changes the preconditioner, and it turns a hard setup
+    /// failure into an unknown the smoother simply cannot help with. Matrices that already have a full
+    /// diagonal are returned untouched.
+    fn ensure_nonzero_diagonal(a: CsrMatrix) -> Result<CsrMatrix> {
+        let n = a.nrows();
+        let diagonal = a.diagonal()?;
+        let missing: Vec<usize> = (0..n).filter(|&i| diagonal[i] == 0.0).collect();
+        if missing.is_empty() {
+            return Ok(a);
+        }
+        let mut triplets: Vec<(usize, usize, f64)> = Vec::with_capacity(a.values().len() + missing.len());
+        for row in 0..n {
+            let entries = a.row(row);
+            for (&column, &value) in entries.columns.iter().zip(entries.values) {
+                if value != 0.0 {
+                    triplets.push((row, column, value));
+                }
+            }
+        }
+        for i in missing {
+            triplets.push((i, i, 1.0));
+        }
+        CsrMatrix::from_triplets(n, n, triplets)
     }
 
     /// Matrix-only state: the finest matrix and nothing else.

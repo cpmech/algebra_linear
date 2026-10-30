@@ -105,8 +105,13 @@ fn relaxation_parameters_and_singular_patterns_are_checked() {
         ));
     }
 
-    let missing_diagonal = CsrMatrix::from_triplets(2, 2, [(0, 1, 1.0), (1, 0, 1.0)]).unwrap();
-    let result = amg_setup(
+    // A null diagonal no longer stops the setup: the hierarchy gives that row a unit diagonal for
+    // its own operators, because a smoother cannot divide by zero and a structural matrix may
+    // legitimately have a degree-zero node. The Krylov method still sees the caller's matrix.
+    // row 0 has no diagonal entry; filling it with one must not make the matrix singular, so the
+    // off-diagonal values are chosen to keep the 2x2 system invertible
+    let missing_diagonal = CsrMatrix::from_triplets(2, 2, [(0, 1, 2.0), (1, 0, 1.0), (1, 1, 3.0)]).unwrap();
+    let mut amg = amg_setup(
         missing_diagonal.row_offsets(),
         missing_diagonal.col_indices(),
         missing_diagonal.values(),
@@ -116,6 +121,9 @@ fn relaxation_parameters_and_singular_patterns_are_checked() {
             direct_coarse: false,
             ..AmgParams::default()
         }),
-    );
-    assert!(matches!(result, Err(Error::InvalidMatrix(_))));
+    )
+    .unwrap();
+    let mut x = vec![0.0; 2];
+    amg.apply(&[1.0, 1.0], &mut x).unwrap();
+    assert!(x.iter().all(|v| v.is_finite()), "{x:?}");
 }

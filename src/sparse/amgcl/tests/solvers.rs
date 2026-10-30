@@ -113,11 +113,14 @@ fn zero_rhs_returns_zero_without_iterations() {
 
 #[test]
 fn coarse_lu_uses_partial_pivoting() {
+    // The direct coarse solve takes the operator as it is: a zero diagonal is fine, pivoting
+    // reorders the rows. (The hierarchy above it fills a null diagonal for its smoothers, which is a
+    // different concern -- there the matrix must be smoothable, here it only has to be factorable.)
+    use crate::sparse::amgcl::coarse::DenseLu;
     let a = CsrMatrix::from_triplets(2, 2, [(0, 1, 2.0), (1, 0, 3.0), (1, 1, 4.0)]).unwrap();
-    let b = vec![2.0, 7.0];
+    let lu = DenseLu::new(&a).unwrap();
     let mut x = vec![0.0; 2];
-    let mut amg = setup(&a, Some(AmgParams::default()));
-    amg.apply(&b, &mut x).unwrap();
+    lu.solve(&[2.0, 7.0], &mut x);
     assert!((x[0] - 1.0).abs() < 1e-14, "{x:?}");
     assert!((x[1] - 1.0).abs() < 1e-14, "{x:?}");
 }

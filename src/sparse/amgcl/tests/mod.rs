@@ -1,5 +1,6 @@
 mod aggregation;
 mod api;
+mod coarse_singular;
 mod irregular;
 mod matrix;
 #[cfg(not(target_arch = "wasm32"))]
