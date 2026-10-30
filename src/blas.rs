@@ -316,12 +316,28 @@ fn gemm_core(alpha: f64, a: &[f64], b: &[f64], beta: f64, c: &mut [f64], m: usiz
     // inside them is reused across the whole inner loop, which is the point --
     // the naive kernel re-reads `a` and `b` from memory for every element of
     // `c`, so it is bound by cache misses rather than by arithmetic.
+    // A small product goes down a straight kernel. The blocked path packs both operands
+    // into MC x KC and KC x NC panels, so a 3x8 by 8x3 element product -- seventy-two
+    // multiplications -- would zero and page-fault a megabyte of packing space to do them.
+    // Below this size the direct loop is both faster and allocation-free.
+    const DIRECT_MAX: usize = 1024;
+    if m * n * k <= DIRECT_MAX {
+        let ada = if trans_a == Trans::No { m } else { k };
+        let adb = if trans_b == Trans::No { k } else { n };
+        gemm_direct(alpha, a, b, c, m, n, k, ada, adb, trans_a, trans_b);
+        return;
+    }
+
     const MC: usize = 128;
     const KC: usize = 256;
     const NC: usize = 256;
 
-    let mut ap = vec![0.0f64; MC * KC];
-    let mut bp = vec![0.0f64; KC * NC];
+    // Size the panels by the block that is actually used, not by the largest one: `alpha` is
+    // folded into `ap`, whose stride stays MC, so only the number of columns can shrink.
+    let kc_max = KC.min(k);
+    let nc_max = NC.min(n);
+    let mut ap = vec![0.0f64; MC * kc_max];
+    let mut bp = vec![0.0f64; kc_max * nc_max];
 
     #[cfg(all(target_arch = "x86_64", not(target_arch = "wasm32")))]
     let use_avx = has_avx2_fma();
@@ -397,6 +413,44 @@ fn gemm_core(alpha: f64, a: &[f64], b: &[f64], beta: f64, c: &mut [f64], m: usiz
                     }
                 }
                 gemm_panel(&ap, &bp, &mut c[ic + jc * m..], m, mc, nc, kc, MC, kc, use_avx);
+            }
+        }
+    }
+}
+
+/// The direct kernel behind [`gemm_core`]'s small-product branch.
+///
+/// `beta` has already been applied to `c` by the caller, so this only accumulates
+/// `alpha * A_op * B_op`. The loops run over the contracted dimension in the middle and over
+/// the rows of `C` innermost, which keeps the inner update a straight run down a column.
+#[allow(clippy::too_many_arguments)]
+fn gemm_direct(
+    alpha: f64,
+    a: &[f64],
+    b: &[f64],
+    c: &mut [f64],
+    m: usize,
+    n: usize,
+    k: usize,
+    ada: usize,
+    adb: usize,
+    trans_a: Trans,
+    trans_b: Trans,
+) {
+    for j in 0..n {
+        let c_col = &mut c[j * m..j * m + m];
+        for p in 0..k {
+            let v = match trans_b {
+                Trans::No => b[p + j * adb],
+                Trans::Yes => b[j + p * adb],
+            };
+            let av = alpha * v;
+            for (i, ci) in c_col.iter_mut().enumerate() {
+                let u = match trans_a {
+                    Trans::No => a[i + p * ada],
+                    Trans::Yes => a[p + i * ada],
+                };
+                *ci += av * u;
             }
         }
     }
@@ -737,6 +791,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// What one element-level product costs, and what a large one costs per flop.
+    ///
+    /// `cargo test --release --lib bench_dgemm -- --ignored --nocapture`
+    ///
+    /// The 3x8 by 8x3 shape is the one a hex8 element's Jacobian and gradient need, and it is
+    /// small enough to be dominated by whatever the kernel does per call rather than by the
+    /// arithmetic: a packing allocation here is the whole cost.
+    #[test]
+    #[ignore]
+    fn bench_dgemm() {
+        use std::time::Instant;
+        let run = |m: usize, n: usize, k: usize, reps: usize| {
+            let a: Vec<f64> = (0..m * k).map(|i| ((i * 7 % 19) as f64) - 9.0).collect();
+            let b: Vec<f64> = (0..k * n).map(|i| ((i * 11 % 23) as f64) - 11.0).collect();
+            let mut c = vec![0.0; m * n];
+            // warm up
+            dgemm(1.0, &a, &b, 0.0, &mut c, m, n, k);
+            let t = Instant::now();
+            for _ in 0..reps {
+                dgemm(1.0, &a, &b, 0.0, &mut c, m, n, k);
+            }
+            let per_call = t.elapsed().as_nanos() as f64 / reps as f64;
+            // flops per nanosecond is GFLOP/s
+            let gflops = (2 * m * n * k) as f64 / per_call;
+            println!("dgemm {m}x{k} by {k}x{n}: {per_call:.0} ns/call, {gflops:.2} GFLOP/s");
+        };
+        run(3, 3, 8, 200_000);
+        run(24, 24, 24, 50_000);
+        run(100, 100, 100, 2_000);
+        run(500, 500, 500, 20);
     }
 
     #[test]
