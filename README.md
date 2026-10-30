@@ -150,6 +150,25 @@ The table below compares it with UMFPACK on the benchmark matrices that complete
 
 `(c)` marks a complex-valued matrix; rows are sorted by NNZ. **NNZ is the matrix-file non-zero count.** Times are five-run averages from the benchmark on the benchmark machine (Arch Linux, Intel Core i9-13900KF).
 
+The kernel underneath matters most where the matrices are small, because the work per call stops
+being the arithmetic. Two products carry an element-level computation, and both were measured on
+that machine with the `bench_dgemm` and `bench_sparse_lu` tests of this crate
+(`cargo test --release --lib bench_ -- --ignored --nocapture`):
+
+| operation | before 2.1.1 | 2.1.1 |
+| --- | ---: | ---: |
+| `dgemm`, 3x8 by 8x3 (72 multiplications) | 8 600 ns | **60 ns** |
+| `dgemm`, 24x24 by 24x24 | ~8.6 µs | **798 ns** (34.7 GFLOP/s) |
+| `dgemm`, 500x500 by 500x500 | 6.36 ms | 6.33 ms (39.5 GFLOP/s) |
+| sparse LU factorization, 192 dofs, fill 2.96 (simplicial) | 1.25 ms | **1.25 ms** |
+| sparse LU factorization, same matrix (supernodal) | 2.99 ms | **0.60 ms** |
+
+The 3x8 by 8x3 case is the Jacobian and gradient of a hex8 element: before 2.1.1 the blocked kernel
+allocated its packing panels at the largest block on every call — 768 kB of zeroed memory for
+seventy-two multiplications — and two of those per Gauss point made a `gemlab` element integral cost
+138 µs. At 60 ns the same integral is 1.05 µs. Large products keep their throughput (the panels are
+now sized by the block actually used); the small end is where the change is.
+
 That direct solver is fast on small systems: up to about 30,000 non-zeros it takes at most a few tens of milliseconds. It becomes very slow for matrices with more than **1 million** non-zeros: the `xenon1` case (NROW=48,600, 1,181,120 non-zeros) takes **55 s**, and the next real case (`twotone`, NROW=120,750, 1,224,224 non-zeros) did not finish within the 3-minute probe. For matrices with more than **1 million** non-zeros, expect **nearly a minute** or more.
 
 The threshold is not a function of NNZ alone. The complex `mplate` (NROW=5,962, 142,190 non-zeros) takes **3.13 s**, and `RFdevice` (NROW=74,104, 365,580 non-zeros) did not finish in **15 minutes**; sparsity structure and numerical type matter as much as the non-zero count.
