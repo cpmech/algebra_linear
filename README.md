@@ -158,6 +158,41 @@ UMFPACK is faster than the direct solver on every matrix in the table; the gap g
 
 ![UMFPACK speed-up over the direct solver](docs/plot_speedup_umfpack.png)
 
+### Iterative solvers
+
+`sparse::amgcl` carries algebraic multigrid and the three Krylov methods `russell_sparse` exposes as
+`Genie::Iterative`. Their convergence is matrix-dependent, and the measured state is worth stating
+before the timings: on the 33 real SuiteSparse matrices of
+[benchmark-russell](https://github.com/cpmech/benchmark-russell), with the default AMG settings and a
+1e-6 relative-error gate, **BiCGStab solves 12, GMRES 7 and CG 1** (CG needs a symmetric positive
+definite matrix). What limits them is not the kernels but how often the preconditioner makes the
+iteration converge.
+
+Where they do converge they earn their place, because the failure mode they cover is the one the
+direct backends cannot:
+
+| matrix | UMFPACK | MUMPS | BiCGStab | GMRES | Direct |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| atmosmodd | out of memory | 46.2 s | **7.78 s** (139 it) | 14.5 s (326 it) | — |
+| atmosmodl | out of memory | 40.9 s | **5.70 s** (84 it) | 7.78 s (147 it) | — |
+| rajat31 | out of memory | 16.0 s | 38.1 s (41 it) | — | — |
+| xenon1 | 595 ms | — | 2.73 s (228 it) | 3.00 s (460 it) | 55.2 s |
+| memchip | 26.3 s | 8.05 s | 21.3 s (77 it) | 8.06 s (37 it) | — |
+| `pmsim-hex8-27` (157 dofs) | 1.88 ms | 7.66 ms | 0.85 ms (15 it) | **0.76 ms** (21 it) | 934 µs |
+
+Three readings: on the matrices whose factorization does not fit in memory, the iterative path is the
+only pure-Rust option and it finishes in seconds; on `xenon1` it is twenty times the direct solver and
+five times slower than UMFPACK, which is the one to use when it can factor the matrix; and on the
+157-dof system a finite-element code factors every step, the Krylov iteration is as fast as the direct
+solve and there is nothing to gain.
+
+Two properties make the hierarchy usable on real matrices, both measured here: a row with no diagonal
+entry — legitimate in a structural matrix — gets a unit diagonal in the hierarchy's own operators
+rather than failing the setup, and a coarsest operator that comes out semi-definite is factorized
+with a small relative diagonal shift (1e-12 … 1e-6 of the operator's largest entry). The system the
+Krylov method solves and measures is always the caller's matrix; only the preconditioner sees the
+adjusted copies.
+
 ## Tests
 
 ```bash
