@@ -137,6 +137,98 @@ impl<T: SparseScalar> SparseLu<T> {
 
 #[cfg(test)]
 mod tests {
+    /// What one sparse factorization of a small 3D box costs.
+    ///
+    /// `cargo test --release --lib bench_sparse_lu -- --ignored --nocapture`
+    ///
+    /// The matrix is the one a driver run factors every step: a 4x4x4 node lattice, three dofs per
+    /// node, every node coupled to its six neighbours through a full 3x3 block. 192 dofs, and the
+    /// factorization is repeated, as the driver does for each accepted step.
+    #[test]
+    #[ignore]
+    fn bench_sparse_lu() {
+        use crate::sparse::{LuMethod, SparseLu};
+        use std::time::Instant;
+        let m = 4_usize; // nodes per side
+        let n = m * m * m * 3;
+        // the loops below run k outer, i inner, so the node numbering must match that order
+        let node = |i: usize, j: usize, k: usize| (k * m * m + j * m + i) * 3;
+        let mut col_ptr = vec![0_usize];
+        let mut row_idx: Vec<usize> = Vec::new();
+        for k in 0..m {
+            for j in 0..m {
+                for i in 0..m {
+                    // every node owns three columns, one per component, and the block coupling connects
+                    // all three components of a node to all three of its neighbours
+                    for _d in 0..3 {
+                        let mut rows: Vec<usize> = Vec::new();
+                        for dk in 0..3_i32 {
+                            for dj in 0..3_i32 {
+                                for di in 0..3_i32 {
+                                    let (ii, jj, kk) = (i as i32 + di - 1, j as i32 + dj - 1, k as i32 + dk - 1);
+                                    if ii < 0 || jj < 0 || kk < 0 || ii >= m as i32 || jj >= m as i32 || kk >= m as i32 {
+                                        continue;
+                                    }
+                                    let base = node(ii as usize, jj as usize, kk as usize);
+                                    for d in 0..3 {
+                                        rows.push(base + d);
+                                    }
+                                }
+                            }
+                        }
+                        rows.sort_unstable();
+                        row_idx.extend_from_slice(&rows);
+                        col_ptr.push(row_idx.len());
+                    }
+                }
+            }
+        }
+        let nnz = row_idx.len();
+        let mut values = vec![0.0_f64; nnz];
+        for col in 0..n {
+            let mut sum = 0.0;
+            for p in col_ptr[col]..col_ptr[col + 1] {
+                if row_idx[p] != col {
+                    values[p] = -1.0;
+                    sum += 1.0;
+                }
+            }
+            for p in col_ptr[col]..col_ptr[col + 1] {
+                if row_idx[p] == col {
+                    values[p] = 10.0 + sum;
+                }
+            }
+        }
+
+        let reps = 160;
+        for (label, method) in [("simplicial", LuMethod::Simplicial), ("auto", LuMethod::auto())] {
+            let mut lu = SparseLu::<f64>::analyze(&col_ptr, &row_idx, method).unwrap();
+            lu.factorize(&col_ptr, &row_idx, &values).unwrap();
+            let (nnz_l, nnz_u, fill) = {
+                let stats = lu.stats().unwrap();
+                (stats.nnz_l, stats.nnz_u, stats.fill_ratio)
+            };
+            let mut b = vec![1.0; n];
+            let t = Instant::now();
+            for _ in 0..reps {
+                lu.factorize(&col_ptr, &row_idx, &values).unwrap();
+            }
+            let per_factorize = t.elapsed().as_secs_f64() / reps as f64;
+            lu.solve(&mut b).unwrap();
+            let t = Instant::now();
+            for _ in 0..(reps * 10) {
+                b.fill(1.0);
+                lu.solve(&mut b).unwrap();
+            }
+            let per_solve = t.elapsed().as_secs_f64() / (reps * 10) as f64;
+            println!(
+                "{label}: n = {n}, nnz(A) = {nnz}, nnz(L) = {nnz_l}, nnz(U) = {nnz_u}, fill = {fill:.2} -> factorize {:.3} ms, solve {:.1} us",
+                per_factorize * 1e3,
+                per_solve * 1e6
+            );
+        }
+    }
+
     use super::*;
     use crate::Complex64;
 
