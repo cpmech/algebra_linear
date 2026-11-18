@@ -13,8 +13,9 @@ harness described below.
 ## Hard constraints
 
 - **Dense matrices are column-major**, indexing `data[i + j * nrow]`. Sparse
-  formats are solver-specific: sparse LU accepts CSC and AMGCL accepts CSR. Do
-  not add implicit CSC/CSR conversion; callers provide the required format.
+  formats are solver-specific: `SparseLu`, `sparse::basiclu`, and `sparse::qdldl`
+  (upper triangle) accept CSC, while AMGCL accepts CSR. Do not add implicit
+  CSC/CSR conversion; callers provide the required format.
 - **Never use `LAPACKE_*`** — it is the row-major API and silently transposes every
   matrix. `lapack.h` binds directly to the Fortran routines and is correctly
   column-major. This applies to the reference harness too.
@@ -219,6 +220,7 @@ otherwise the next person spends a day rediscovering why a file sits below the b
 | `src/sparse/ordering/colamd.rs` | the garbage-collection and super-column repair arms are reached only by fill patterns larger than the fixtures; `SparseError::IndexOverflow` is unreachable at test sizes |
 | `src/sparse/supernodal/lu.rs` | the L/U diagonal-structure guards are drop-invariant checks: a correct supernode partition cannot reach them |
 | `src/sparse/solver.rs`, `src/sparse/csc.rs`, `src/sparse/lu.rs` | accessor bodies that no test calls; they are not refusal arms |
+| `src/sparse/basiclu/{degree_list,eliminate,markowitz,singletons,solve,update}.rs` | `u32::MAX` generation-counter wraparound resets, defensive `NONE` / empty-seed early-return guards, non-finite spike overflow cleanup, and exact-zero row-eta weight guards (`src/sparse/qdldl/` has 100% line coverage) |
 
 So the remainder is rescue and refusal code, by design: a correct routine cannot
 reach the arms whose job is to reject bad input or survive an iteration that gave
@@ -279,7 +281,11 @@ These are the rules the code depends on. Each one has been violated at least onc
 
 ## Licence
 
-BSD 3-Clause. The kernels derive from LAPACK 3.12.1 (BSD 3-Clause); `LICENSE`
-reproduces that notice verbatim and it must stay verbatim. A kernel taken from
-another project (OpenBLAS, say) brings its own notice into the same file — and, for
-anything descending from GotoBLAS, the University of Texas at Austin line as well.
+`BSD-3-Clause AND Apache-2.0`. The dense kernels derive from LAPACK 3.12.1
+(BSD 3-Clause), `sparse::qdldl` derives from `osqp/qdldl` `v0.1.9` (Apache-2.0),
+and `SparseLu`, `sparse::amgcl`, and `sparse::basiclu` follow MIT-licensed
+upstream projects (`faer`, `AMGCL`, and `HiGHS`/`BasicLU`). `LICENSE` reproduces
+every upstream copyright notice and license text verbatim, and they must stay
+verbatim. A kernel taken from another project (OpenBLAS, say) brings its own
+notice into the same file — and, for anything descending from GotoBLAS, the
+University of Texas at Austin line as well.

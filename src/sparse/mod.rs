@@ -1,15 +1,19 @@
 //! Sparse direct and iterative solvers.
 //!
-//! [`SparseLu`] is the direct solver: it analyzes a compressed sparse column
-//! (CSC) pattern once, then factorizes any values on that pattern. The COLAMD
-//! ordering reduces fill, [`LuMethod`] chooses a simplicial or supernodal
-//! factorization, and [`SparseLuStats`] reports the structure, cost and timing.
-//! The [`amgcl`] submodule provides algebraic multigrid and preconditioned
-//! Krylov solvers for compressed sparse row (CSR) arrays.
+//! [`SparseLu`] is the general direct solver: it analyzes a compressed sparse
+//! column (CSC) pattern once, then factorizes any values on that pattern. The
+//! COLAMD ordering reduces fill, [`LuMethod`] chooses a simplicial or
+//! supernodal factorization, and [`SparseLuStats`] reports the structure, cost
+//! and timing. The [`qdldl`] submodule provides an unpivoted `L D L^T` solver
+//! for symmetric positive-definite and quasi-definite CSC systems,
+//! [`basiclu`] provides a Markowitz sparse LU factorization with hyper-sparse
+//! solves and Forrest–Tomlin rank-1 updates, and [`amgcl`] provides algebraic
+//! multigrid and preconditioned Krylov solvers for compressed sparse row (CSR)
+//! arrays.
 //!
 //! # Provenance
 //!
-//! The algorithms are translated from faer commit `ddbd2ae`
+//! The `SparseLu` algorithms are translated from faer commit `ddbd2ae`
 //! (<https://codeberg.org/sarah-quinones/faer>):
 //!
 //! * `faer/src/sparse/linalg/lu.rs` — the simplicial LU, MIT;
@@ -20,6 +24,9 @@
 //!
 //! The [`amgcl`] submodule follows AMGCL revision
 //! `1fbc24e687b404962c31bc4db598f6c73c0f4333` (MIT).
+//! The [`qdldl`] submodule follows `osqp/qdldl` `v0.1.9` (Apache-2.0).
+//! The [`basiclu`] submodule follows BasicLU from `ERGO-Code/HiGHS`
+//! (`highs/ipm/basiclu/`, MIT).
 //!
 //! See `LICENSE` for the notices.
 //!
@@ -27,8 +34,9 @@
 //!
 //! The crate's conventions hold here as well: column-major dense storage,
 //! 0-based `usize` indices, no workspace arguments, and errors instead of
-//! `INFO`. Sparse inputs are not converted between formats: sparse LU callers
-//! provide CSC, while AMGCL callers provide CSR as required by the solver.
+//! `INFO`. Sparse inputs are not converted between formats: sparse direct
+//! callers provide CSC, while AMGCL callers provide CSR as required by the
+//! solver.
 //!
 //! # Example
 //!
@@ -47,6 +55,8 @@
 //! ```
 
 pub mod amgcl;
+pub mod basiclu;
+pub mod qdldl;
 
 mod csc;
 mod etree;

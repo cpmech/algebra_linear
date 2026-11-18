@@ -2,8 +2,8 @@
 name = "algebra_linear"
 version = "2.1.1"
 edition = "2024"
-license = "BSD-3-Clause"
-description = "Pure-Rust BLAS, LAPACK, sparse LU, AMG, and Krylov solvers"
+license = "BSD-3-Clause AND Apache-2.0"
+description = "Pure-Rust BLAS, LAPACK, sparse LU/LDL^T, AMG, and Krylov solvers"
 homepage = "https://github.com/cpmech/algebra_linear"
 repository = "https://github.com/cpmech/algebra_linear"
 documentation = "https://docs.rs/algebra_linear"
@@ -12,7 +12,7 @@ categories = ["mathematics", "science"]
 keywords = ["blas", "lapack", "linear-algebra", "matrix", "amg"]
 # Process files stay out of the published crate: code, README, LICENSE and the
 # reference harness are what a user needs.
-exclude = ["AGENTS.md", ".github/", ".gitignore", "rustfmt.toml", "zscripts/"]
+exclude = ["AGENTS.md", ".github/", ".gitignore", "rustfmt.toml", "zscripts/", "port-basiclu/", "port-qdldl/"]
 
 # The reference-LAPACK parity harness. Development only: `build.rs` links a
 # locally built LAPACK 3.12.1 and the tests compare the kernels against it.

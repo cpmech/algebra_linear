@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Pure-Rust BLAS, LAPACK, sparse direct solvers, and AMG/Krylov solvers.
+//! Pure-Rust BLAS, LAPACK, sparse direct solvers (`SparseLu`, `sparse::qdldl`, `sparse::basiclu`), and AMG/Krylov solvers (`sparse::amgcl`).
 //!
 //! # Layout and conventions
 //!
@@ -19,9 +19,12 @@
 //! development-only harness), and against closed-form results otherwise; see the
 //! tests in each module.
 //!
-//! The routines here are derived from LAPACK and reference BLAS, which are
-//! BSD-3-Clause; see `LICENSE` for their copyright notices and this crate's
-//! licence.
+//! The dense routines here are derived from LAPACK and reference BLAS, which
+//! are BSD-3-Clause; `sparse::qdldl` is derived from `osqp/qdldl` `v0.1.9`
+//! (Apache-2.0); `SparseLu`, `sparse::amgcl`, and `sparse::basiclu` follow
+//! MIT-licensed upstream projects (`faer`, `AMGCL`, and `HiGHS`/`BasicLU`).
+//! The crate is distributed under `BSD-3-Clause AND Apache-2.0`; see
+//! `LICENSE` for all copyright notices and license texts.
 
 pub mod blas;
 pub mod lapack;

@@ -6,6 +6,8 @@
 #![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 
 use algebra_linear::sparse::amgcl::{AmgParams, KrylovMethod, Parallelism, SolverParams, amg_setup, krylov_solve};
+use algebra_linear::sparse::basiclu::{BasicLu, BasicLuParams};
+use algebra_linear::sparse::qdldl::Qdldl;
 use algebra_linear::sparse::{LuMethod, SparseLu};
 use wasm_bindgen_test::*;
 
@@ -92,4 +94,44 @@ fn amgcl_uses_the_serial_browser_path() {
     .unwrap();
     assert!(report.converged);
     assert!(x.iter().all(|value| value.is_finite()));
+}
+
+#[wasm_bindgen_test]
+fn qdldl_runs_in_the_browser_target() {
+    // Symmetric quasi-definite KKT matrix: [[4, 0, 1], [0, 3, -1], [1, -1, 0]] (upper triangle).
+    let col_ptr = [0, 1, 2, 4];
+    let row_idx = [0, 1, 0, 1];
+    let values = [4.0, 3.0, 1.0, -1.0];
+
+    let mut qdldl = Qdldl::analyze(&col_ptr, &row_idx).unwrap();
+    qdldl.factorize(&col_ptr, &row_idx, &values).unwrap();
+    assert_eq!(qdldl.stats().unwrap().positive_inertia, 2);
+
+    let mut x = [5.0, 2.0, 0.0];
+    qdldl.solve(&mut x).unwrap();
+    assert!((x[0] - 1.0).abs() < 1e-13);
+    assert!((x[1] - 1.0).abs() < 1e-13);
+    assert!((x[2] - 1.0).abs() < 1e-13);
+}
+
+#[wasm_bindgen_test]
+fn basiclu_runs_in_the_browser_target() {
+    let col_ptr = [0, 2, 4];
+    let row_idx = [0, 1, 0, 1];
+    let values = [4.0, 1.0, 1.0, 3.0];
+
+    let mut lu = BasicLu::new(BasicLuParams::default());
+    lu.factorize(&col_ptr, &row_idx, &values).unwrap();
+
+    let mut x = [1.0, 2.0];
+    lu.solve(&mut x).unwrap();
+    assert!((x[0] - 1.0 / 11.0).abs() < 1e-13);
+    assert!((x[1] - 7.0 / 11.0).abs() < 1e-13);
+
+    // Replace column 0 with [2.0, 0.0]^T -> A_new = [[2, 1], [0, 3]], x = [1, 1] for b = [3, 3].
+    lu.update(0, &[0], &[2.0]).unwrap();
+    let mut rhs = [3.0, 3.0];
+    lu.solve(&mut rhs).unwrap();
+    assert!((rhs[0] - 1.0).abs() < 1e-13);
+    assert!((rhs[1] - 1.0).abs() < 1e-13);
 }
