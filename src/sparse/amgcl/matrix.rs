@@ -1,5 +1,5 @@
 use crate::sparse::amgcl::memory::{
-    MemoryBudget, csr_bytes, out_of_memory, try_clone_slice, try_reserve_vec_filled, try_reserve_vec_with_capacity, try_vec_filled,
+    BudgetGuard, MemoryBudget, csr_bytes, try_clone_slice, try_reserve_vec_filled, try_reserve_vec_with_capacity, try_vec_filled,
     try_vec_with_capacity, vec_bytes,
 };
 use crate::sparse::amgcl::parallel::{Parallelism, for_each_mut, map_chunks};
@@ -408,61 +408,63 @@ impl CsrMatrix {
         budget.check_additional(workers.saturating_mul(per_worker_bytes), level)?;
 
         let budget_mb = budget.budget_mb();
-        let raw_chunks = map_chunks(self.nrows, params, |start, end| -> Result<Vec<(Vec<usize>, Vec<f64>)>> {
-            let mut rows = try_reserve_vec_with_capacity(end - start, budget_mb, level)?;
-            let mut accumulator = try_reserve_vec_filled(0.0, rhs.ncols, budget_mb, level)?;
-            let mut touched = Vec::new();
-            let mut marker = try_reserve_vec_filled(usize::MAX, rhs.ncols, budget_mb, level)?;
-            for row in start..end {
-                touched.clear();
-                for left_index in self.row_offsets[row]..self.row_offsets[row + 1] {
-                    let inner = self.col_indices[left_index];
-                    let left_value = self.values[left_index];
-                    for right_index in rhs.row_offsets[inner]..rhs.row_offsets[inner + 1] {
-                        let column = rhs.col_indices[right_index];
-                        if marker[column] != row {
-                            marker[column] = row;
-                            accumulator[column] = 0.0;
-                            if touched.len() == touched.capacity() {
-                                touched
-                                    .try_reserve(1)
-                                    .map_err(|_| out_of_memory(vec_bytes::<usize>(touched.len().saturating_add(1)), budget_mb, level))?;
+        let raw_chunks = map_chunks(
+            self.nrows,
+            params,
+            |start, end| -> Result<(Vec<(Vec<usize>, Vec<f64>)>, BudgetGuard<'_>)> {
+                let mut chunk_guard = budget.try_guard(vec_bytes::<(Vec<usize>, Vec<f64>)>(end - start), level)?;
+                let mut rows = try_reserve_vec_with_capacity(end - start, budget_mb, level)?;
+                let _workspace_guard = budget.try_guard(rhs.ncols.saturating_mul(3 * core::mem::size_of::<f64>()), level)?;
+                let mut accumulator = try_reserve_vec_filled(0.0, rhs.ncols, budget_mb, level)?;
+                let mut marker = try_reserve_vec_filled(usize::MAX, rhs.ncols, budget_mb, level)?;
+                let mut touched = try_reserve_vec_with_capacity::<usize>(rhs.ncols, budget_mb, level)?;
+                for row in start..end {
+                    touched.clear();
+                    for left_index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                        let inner = self.col_indices[left_index];
+                        let left_value = self.values[left_index];
+                        for right_index in rhs.row_offsets[inner]..rhs.row_offsets[inner + 1] {
+                            let column = rhs.col_indices[right_index];
+                            if marker[column] != row {
+                                marker[column] = row;
+                                accumulator[column] = 0.0;
+                                touched.push(column);
                             }
-                            touched.push(column);
+                            accumulator[column] += left_value * rhs.values[right_index];
                         }
-                        accumulator[column] += left_value * rhs.values[right_index];
                     }
-                }
-                touched.sort_unstable();
-                let mut columns = try_reserve_vec_with_capacity(touched.len(), budget_mb, level)?;
-                let mut values = try_reserve_vec_with_capacity(touched.len(), budget_mb, level)?;
-                for &column in &touched {
-                    let value = accumulator[column];
-                    if value != 0.0 {
-                        columns.push(column);
-                        values.push(value);
+                    touched.sort_unstable();
+                    let row_guard = budget.try_guard(
+                        touched.len().saturating_mul(core::mem::size_of::<usize>() + core::mem::size_of::<f64>()),
+                        level,
+                    )?;
+                    let mut columns = try_reserve_vec_with_capacity(touched.len(), budget_mb, level)?;
+                    let mut values = try_reserve_vec_with_capacity(touched.len(), budget_mb, level)?;
+                    for &column in &touched {
+                        let value = accumulator[column];
+                        if value != 0.0 {
+                            columns.push(column);
+                            values.push(value);
+                        }
                     }
+                    rows.push((columns, values));
+                    chunk_guard.merge(row_guard);
                 }
-                rows.push((columns, values));
-            }
-            Ok(rows)
-        });
+                Ok((rows, chunk_guard))
+            },
+        );
 
         let mut products = try_vec_with_capacity(raw_chunks.len(), budget, level)?;
+        let mut guards: Vec<BudgetGuard<'_>> = try_vec_with_capacity(raw_chunks.len(), budget, level)?;
         let mut total_nnz = 0_usize;
         for chunk in raw_chunks {
-            let rows = chunk?;
+            let (rows, guard) = chunk?;
             for (columns, _) in &rows {
                 total_nnz = total_nnz.saturating_add(columns.len());
             }
             products.push(rows);
+            guards.push(guard);
         }
-
-        let transient_bytes = total_nnz
-            .saturating_mul(core::mem::size_of::<usize>() + core::mem::size_of::<f64>())
-            .saturating_add(vec_bytes::<(Vec<usize>, Vec<f64>)>(self.nrows));
-        let output_bytes = csr_bytes(self.nrows, total_nnz);
-        budget.check_additional(transient_bytes.saturating_add(output_bytes), level)?;
 
         let mut row_offsets = try_vec_with_capacity::<usize>(self.nrows + 1, budget, level)?;
         let mut col_indices = try_vec_with_capacity::<usize>(total_nnz, budget, level)?;
@@ -476,6 +478,7 @@ impl CsrMatrix {
                 row_offsets.push(values.len());
             }
         }
+        drop(guards);
         Self::from_parts(self.nrows, rhs.ncols, row_offsets, col_indices, values)
     }
 

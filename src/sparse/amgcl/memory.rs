@@ -1,6 +1,6 @@
 //! Memory accounting, soft memory budgets, and fallible bulk allocations.
 
-use core::cell::Cell;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::sparse::amgcl::{Error, Result};
 
@@ -29,7 +29,7 @@ pub(crate) fn csr_bytes(nrows: usize, nnz: usize) -> usize {
 pub(crate) struct MemoryBudget {
     budget_mb: usize,
     budget_bytes: usize,
-    retained_bytes: Cell<usize>,
+    retained_bytes: AtomicUsize,
 }
 
 impl MemoryBudget {
@@ -38,7 +38,7 @@ impl MemoryBudget {
         Self {
             budget_mb,
             budget_bytes: budget_mb.saturating_mul(BYTES_PER_MIB),
-            retained_bytes: Cell::new(0),
+            retained_bytes: AtomicUsize::new(0),
         }
     }
 
@@ -49,7 +49,7 @@ impl MemoryBudget {
 
     /// Currently retained bytes recorded in this budget.
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.retained_bytes.get()
+        self.retained_bytes.load(Ordering::Relaxed)
     }
 
     /// Checks whether adding `additional_bytes` fits within the configured budget.
@@ -57,7 +57,7 @@ impl MemoryBudget {
         if self.budget_mb == 0 {
             return Ok(());
         }
-        let total = self.retained_bytes.get().saturating_add(additional_bytes);
+        let total = self.retained_bytes.load(Ordering::Relaxed).saturating_add(additional_bytes);
         if total > self.budget_bytes {
             return Err(Error::OutOfMemory {
                 needed_mb: bytes_to_mib_ceil(total),
@@ -70,18 +70,40 @@ impl MemoryBudget {
 
     /// Adds `bytes` to the retained footprint.
     pub(crate) fn record_retained(&self, bytes: usize) {
-        self.retained_bytes.set(self.retained_bytes.get().saturating_add(bytes));
+        let _ = self
+            .retained_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some(current.saturating_add(bytes)));
     }
 
     /// Subtracts `bytes` from the retained footprint.
     pub(crate) fn release_retained(&self, bytes: usize) {
-        self.retained_bytes.set(self.retained_bytes.get().saturating_sub(bytes));
+        let _ = self
+            .retained_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some(current.saturating_sub(bytes)));
     }
 
     /// Records `bytes` as retained and returns an RAII guard that releases them on drop.
     pub(crate) fn guard(&self, bytes: usize) -> BudgetGuard<'_> {
         self.record_retained(bytes);
         BudgetGuard { budget: self, bytes }
+    }
+
+    /// Atomically checks that `bytes` fit and records them; the returned guard releases them on drop.
+    pub(crate) fn try_guard(&self, bytes: usize, level: Option<usize>) -> Result<BudgetGuard<'_>> {
+        loop {
+            let current = self.retained_bytes.load(Ordering::Relaxed);
+            let total = current.saturating_add(bytes);
+            if self.budget_mb != 0 && total > self.budget_bytes {
+                return Err(out_of_memory(total, self.budget_mb, level));
+            }
+            if self
+                .retained_bytes
+                .compare_exchange_weak(current, total, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return Ok(BudgetGuard { budget: self, bytes });
+            }
+        }
     }
 
     /// Builds an [`Error::OutOfMemory`] for a failed allocation of `requested_bytes`.

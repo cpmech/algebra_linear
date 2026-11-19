@@ -1,8 +1,8 @@
 use crate::sparse::amgcl::matrix::CsrMatrix;
-use crate::sparse::amgcl::memory::{BYTES_PER_MIB, bytes_to_mib_ceil};
+use crate::sparse::amgcl::memory::{BYTES_PER_MIB, MemoryBudget, bytes_to_mib_ceil};
 use crate::sparse::amgcl::{
-    AggregationParams, AmgParams, ChebyshevParams, Coarsening, Error, Ilu0Params, KrylovMethod, SmoothedAggregationParams, Smoother, SolverParams,
-    amg_setup, amg_setup_owned, krylov_solve,
+    AggregationParams, AmgParams, ChebyshevParams, Coarsening, Error, Ilu0Params, KrylovMethod, Parallelism, SmoothedAggregationParams, Smoother,
+    SolverParams, amg_setup, amg_setup_owned, krylov_solve,
 };
 
 fn tridiagonal_spd_raw(n: usize) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
@@ -56,6 +56,51 @@ fn true_relative_residual(a: &CsrMatrix, b: &[f64], x: &[f64]) -> f64 {
     let num = r.iter().map(|v| v * v).sum::<f64>().sqrt();
     let den = b.iter().map(|v| v * v).sum::<f64>().sqrt();
     num / den
+}
+
+#[test]
+fn matmul_budget_gates_cancelling_transient_peak() {
+    let a = CsrMatrix::from_parts(1, 2, vec![0, 2], vec![0, 1], vec![1.0, 1.0]).unwrap();
+    let ncols = 40_000;
+    let row_offsets = vec![0, ncols, 2 * ncols];
+    let mut col_indices = Vec::with_capacity(2 * ncols);
+    let mut values = Vec::with_capacity(2 * ncols);
+    for column in 0..ncols {
+        col_indices.push(column);
+        values.push(1.0);
+    }
+    for column in 0..ncols {
+        col_indices.push(column);
+        values.push(-1.0);
+    }
+    let b = CsrMatrix::from_parts(2, ncols, row_offsets, col_indices, values).unwrap();
+
+    let err = a
+        .matmul_with_budget(&b, Parallelism::default(), &MemoryBudget::new(1), Some(0))
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::OutOfMemory {
+                budget_mb: 1,
+                level: Some(0),
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+
+    let product = a.matmul_with_budget(&b, Parallelism::default(), &MemoryBudget::new(0), Some(0)).unwrap();
+    assert_eq!(product.row_offsets(), &[0, 0]);
+    assert_eq!(product.nnz(), 0);
+}
+
+#[test]
+fn matmul_budget_preserves_product() {
+    let a = CsrMatrix::from_triplets(2, 2, [(0, 0, 1.0), (0, 1, 2.0), (1, 1, 3.0)]).unwrap();
+    let b = CsrMatrix::from_triplets(2, 2, [(0, 0, 4.0), (1, 0, 5.0), (1, 1, 6.0)]).unwrap();
+    let product = a.matmul_with_budget(&b, Parallelism::default(), &MemoryBudget::new(0), None).unwrap();
+    assert_eq!(product.to_dense(), vec![14.0, 12.0, 15.0, 18.0]);
 }
 
 #[test]
