@@ -5,10 +5,10 @@
 //! `wasm32-unknown-unknown`.
 #![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 
-use algebra_linear::sparse::amgcl::{AmgParams, KrylovMethod, Parallelism, SolverParams, amg_setup, krylov_solve};
+use algebra_linear::sparse::amgcl::{AmgParams, KrylovMethod, Parallelism, SolverParams, amg_setup, amg_setup_owned, krylov_solve};
 use algebra_linear::sparse::basiclu::{BasicLu, BasicLuParams};
 use algebra_linear::sparse::qdldl::Qdldl;
-use algebra_linear::sparse::{LuMethod, SparseLu};
+use algebra_linear::sparse::{EffectiveLuMethod, LuMethod, SparseLu};
 use wasm_bindgen_test::*;
 
 /// Five-point Laplacian on an `nx` by `ny` grid as raw CSR arrays.
@@ -52,7 +52,10 @@ fn sparse_lu_runs_in_the_browser_target() {
     let row_idx = [0, 1, 0, 1];
     let values = [4.0, 1.0, 1.0, 3.0];
     let mut lu = SparseLu::analyze(&col_ptr, &row_idx, LuMethod::auto()).unwrap();
+    assert_eq!(lu.effective_method(), EffectiveLuMethod::Simplicial);
+    assert!(lu.flop_ratio().is_some());
     lu.factorize(&col_ptr, &row_idx, &values).unwrap();
+    assert_eq!(lu.stats().unwrap().method, EffectiveLuMethod::Simplicial);
     let mut x = [1.0, 2.0];
     lu.solve(&mut x).unwrap();
     assert!((x[0] - 1.0 / 11.0).abs() < 1e-14);
@@ -94,6 +97,21 @@ fn amgcl_uses_the_serial_browser_path() {
     .unwrap();
     assert!(report.converged);
     assert!(x.iter().all(|value| value.is_finite()));
+
+    let mut owned = amg_setup_owned(
+        row_ptr,
+        col_idx,
+        values,
+        Some(AmgParams {
+            parallelism,
+            ..AmgParams::default()
+        }),
+    )
+    .unwrap();
+    assert!(owned.memory_bytes() > 0);
+    let mut x_owned = vec![0.0; n];
+    let owned_report = krylov_solve(KrylovMethod::Gmres, &mut owned, &b, &mut x_owned, SolverParams::default()).unwrap();
+    assert!(owned_report.converged);
 }
 
 #[wasm_bindgen_test]

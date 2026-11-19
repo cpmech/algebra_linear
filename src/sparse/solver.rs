@@ -39,6 +39,32 @@ const RELAX_MAX_CHILD_SIZE: usize = 4;
 /// when a child is merged into its parent.
 const RELAX_FILL_TOLERANCE: f64 = 0.1;
 
+/// The concrete factorization selected during symbolic analysis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectiveLuMethod {
+    /// The simplicial LU factorization.
+    Simplicial,
+    /// The supernodal LU factorization.
+    Supernodal,
+}
+
+impl EffectiveLuMethod {
+    /// Returns the variant name (`"Simplicial"` or `"Supernodal"`).
+    #[inline]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Simplicial => "Simplicial",
+            Self::Supernodal => "Supernodal",
+        }
+    }
+}
+
+impl core::fmt::Display for EffectiveLuMethod {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Which factorization the solver should use.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LuMethod {
@@ -73,6 +99,7 @@ impl Default for LuMethod {
 pub struct LuSymbolic {
     nnz: usize,
     supernodal: bool,
+    flop_ratio: Option<f64>,
     simplicial: SymbolicLu,
     supernodal_symbolic: Option<SymbolicSupernodal>,
 }
@@ -80,14 +107,16 @@ pub struct LuSymbolic {
 impl LuSymbolic {
     /// Analyzes `pattern` and resolves the method.
     ///
-    /// The supernodal symbolic structure is always computed: its column counts
-    /// are what the automatic choice uses. If the simplicial method is chosen,
-    /// the structure is dropped after the decision.
+    /// Supernodal symbolic analysis is skipped for explicit [`LuMethod::Simplicial`]
+    /// and runs for [`LuMethod::Supernodal`] and [`LuMethod::Auto`], whose column
+    /// counts determine the flop ratio. If the automatic choice selects the
+    /// simplicial path, the supernodal symbolic structure is dropped after the
+    /// decision while keeping the computed flop ratio.
     ///
     /// # Errors
     ///
     /// [`SparseError::BadShape`] if the matrix is not square, plus the ordering
-    /// and symbolic errors of the two analyses.
+    /// and symbolic errors of the analyses that ran.
     pub fn analyze(pattern: CscPattern<'_>, method: LuMethod) -> Result<Self, SparseError> {
         let simplicial = SymbolicLu::analyze(pattern)?;
 
@@ -96,7 +125,7 @@ impl LuSymbolic {
         // counts, the supernode partition and the transposed pattern are all
         // discarded. `Auto` still needs it to evaluate the flop proxy.
         let (supernodal_symbolic, flop_ratio) = match method {
-            LuMethod::Simplicial => (None, 0.0),
+            LuMethod::Simplicial => (None, None),
             LuMethod::Supernodal | LuMethod::Auto { .. } => {
                 // The fundamental partition leaves mostly one-column
                 // supernodes on the matrices measured so far, so apply the
@@ -107,29 +136,44 @@ impl LuSymbolic {
                 let counts = symbolic.col_counts();
                 let squares: f64 = counts.iter().map(|&c| (c as f64) * (c as f64)).sum();
                 let ratio = if pattern.nnz() == 0 { 0.0 } else { squares / pattern.nnz() as f64 };
-                (Some(symbolic), ratio)
+                (Some(symbolic), Some(ratio))
             }
         };
 
         let supernodal = match method {
             LuMethod::Simplicial => false,
             LuMethod::Supernodal => true,
-            LuMethod::Auto { flop_ratio_threshold } => flop_ratio > flop_ratio_threshold,
+            LuMethod::Auto { flop_ratio_threshold } => flop_ratio.unwrap_or(0.0) > flop_ratio_threshold,
         };
         Ok(Self {
             nnz: pattern.nnz(),
             supernodal,
+            flop_ratio,
             simplicial,
             supernodal_symbolic: if supernodal { supernodal_symbolic } else { None },
         })
     }
 
     /// Returns `true` if the supernodal factorization was selected.
-    // Test-only: exposed so the tests can inspect the choice.
-    #[cfg(test)]
     #[inline]
     pub fn is_supernodal(&self) -> bool {
         self.supernodal
+    }
+
+    /// Returns the concrete factorization selected by symbolic analysis.
+    #[inline]
+    pub fn effective_method(&self) -> EffectiveLuMethod {
+        if self.is_supernodal() {
+            EffectiveLuMethod::Supernodal
+        } else {
+            EffectiveLuMethod::Simplicial
+        }
+    }
+
+    /// Returns the symbolic flop-ratio proxy `Σ col_counts² / nnz(A)`, if computed.
+    #[inline]
+    pub fn flop_ratio(&self) -> Option<f64> {
+        self.flop_ratio
     }
 
     /// Returns the number of stored entries the analysis saw.
@@ -350,5 +394,65 @@ mod tests {
         let symbolic = LuSymbolic::analyze(CscPattern::new(6, 6, &cp, &ri).unwrap(), LuMethod::Simplicial).unwrap();
         let other = CscView::new(6, 6, &[0, 0, 0, 0, 0, 0, 0], &[], &[] as &[f64]).unwrap();
         assert_eq!(symbolic.factorize(other).unwrap_err(), SparseError::StructureMismatch);
+    }
+
+    #[test]
+    fn effective_lu_method_as_str_and_display() {
+        assert_eq!(EffectiveLuMethod::Simplicial.as_str(), "Simplicial");
+        assert_eq!(EffectiveLuMethod::Supernodal.as_str(), "Supernodal");
+        assert_eq!(EffectiveLuMethod::Simplicial.to_string(), "Simplicial");
+        assert_eq!(EffectiveLuMethod::Supernodal.to_string(), "Supernodal");
+    }
+
+    #[test]
+    fn effective_method_and_flop_ratio_across_methods() {
+        let (tri_cp, tri_ri) = tridiag(9);
+        let tri_pat = CscPattern::new(9, 9, &tri_cp, &tri_ri).unwrap();
+
+        let sim = LuSymbolic::analyze(tri_pat, LuMethod::Simplicial).unwrap();
+        assert_eq!(sim.effective_method(), EffectiveLuMethod::Simplicial);
+        assert!(!sim.is_supernodal());
+        assert_eq!(sim.flop_ratio(), None);
+
+        let sup = LuSymbolic::analyze(tri_pat, LuMethod::Supernodal).unwrap();
+        assert_eq!(sup.effective_method(), EffectiveLuMethod::Supernodal);
+        assert!(sup.is_supernodal());
+        let sup_ratio = sup.flop_ratio().expect("supernodal computes flop ratio");
+        assert!(sup_ratio > 0.0, "expected positive flop ratio, got {sup_ratio}");
+
+        let auto_sim = LuSymbolic::analyze(tri_pat, LuMethod::auto()).unwrap();
+        assert_eq!(auto_sim.effective_method(), EffectiveLuMethod::Simplicial);
+        assert!(!auto_sim.is_supernodal());
+        let auto_sim_ratio = auto_sim.flop_ratio().expect("auto computes flop ratio");
+        assert!(
+            auto_sim_ratio > 0.0 && auto_sim_ratio <= 40.0,
+            "expected 0 < ratio <= 40, got {auto_sim_ratio}"
+        );
+        assert!((auto_sim_ratio - sup_ratio).abs() < f64::EPSILON);
+
+        // Threshold equality keeps simplicial because selection requires strict `>`.
+        let boundary = LuSymbolic::analyze(
+            tri_pat,
+            LuMethod::Auto {
+                flop_ratio_threshold: auto_sim_ratio,
+            },
+        )
+        .unwrap();
+        assert_eq!(boundary.effective_method(), EffectiveLuMethod::Simplicial);
+        assert_eq!(boundary.flop_ratio(), Some(auto_sim_ratio));
+
+        let (dense_cp, dense_ri) = dense(12);
+        let dense_pat = CscPattern::new(12, 12, &dense_cp, &dense_ri).unwrap();
+        let auto_sup = LuSymbolic::analyze(dense_pat, LuMethod::Auto { flop_ratio_threshold: 1.0 }).unwrap();
+        assert_eq!(auto_sup.effective_method(), EffectiveLuMethod::Supernodal);
+        assert!(auto_sup.is_supernodal());
+        let auto_sup_ratio = auto_sup.flop_ratio().expect("auto computes flop ratio");
+        assert!(auto_sup_ratio > 1.0, "expected ratio > 1.0, got {auto_sup_ratio}");
+
+        let empty_pat = CscPattern::new(0, 0, &[0], &[]).unwrap();
+        let empty = LuSymbolic::analyze(empty_pat, LuMethod::auto()).unwrap();
+        assert_eq!(empty.effective_method(), EffectiveLuMethod::Simplicial);
+        assert!(!empty.is_supernodal());
+        assert_eq!(empty.flop_ratio(), Some(0.0));
     }
 }

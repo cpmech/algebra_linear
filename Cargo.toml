@@ -1,6 +1,6 @@
 [package]
 name = "algebra_linear"
-version = "2.1.1"
+version = "3.0.0"
 edition = "2024"
 license = "BSD-3-Clause AND Apache-2.0"
 description = "Pure-Rust BLAS, LAPACK, sparse LU/LDL^T, AMG, and Krylov solvers"

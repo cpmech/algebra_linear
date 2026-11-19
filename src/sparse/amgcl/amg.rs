@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::sparse::amgcl::coarse::DenseLu;
-use crate::sparse::amgcl::coarsening::{Coarsening, transfer};
+use crate::sparse::amgcl::coarsening::{Coarsening, transfer_with_budget};
 use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::memory::{MemoryBudget, csr_bytes, try_clone_slice, try_vec_filled, vec_bytes};
 use crate::sparse::amgcl::parallel::Parallelism;
 use crate::sparse::amgcl::preconditioner::Preconditioner;
 use crate::sparse::amgcl::relaxation::{Relaxation, Smoother};
@@ -35,6 +36,8 @@ pub struct AmgParams {
     pub preconditioner_cycles: usize,
     /// Shared-memory execution for setup, cycle, and smoother kernels.
     pub parallelism: Parallelism,
+    /// Maximum working memory budget in MiB (`0` disables the limit).
+    pub max_memory_mb: usize,
 }
 
 impl Default for AmgParams {
@@ -50,6 +53,7 @@ impl Default for AmgParams {
             cycle_iterations: 1,
             preconditioner_cycles: 1,
             parallelism: Parallelism::default(),
+            max_memory_mb: 0,
         }
     }
 }
@@ -95,31 +99,44 @@ struct Level {
 }
 
 impl Level {
-    fn new(
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_budget(
         a: Arc<CsrMatrix>,
         p: Option<CsrMatrix>,
         r: Option<CsrMatrix>,
         coarse: Option<DenseLu>,
         smoother: Smoother,
         parallel: Parallelism,
+        budget: &MemoryBudget,
+        level_idx: usize,
     ) -> Result<Self> {
         let n = a.nrows();
         let needs_smoother = coarse.is_none() || p.is_some();
         let relaxation = if needs_smoother {
-            Some(Relaxation::new_with(a.as_ref(), smoother, parallel)?)
+            let rel = Relaxation::new_with_budget(a.as_ref(), smoother, parallel, budget, Some(level_idx))?;
+            budget.record_retained(rel.memory_bytes());
+            Some(rel)
         } else {
             None
         };
         let coarse_size = p.as_ref().map_or(0, CsrMatrix::ncols);
+        let work_bytes = vec_bytes::<f64>(n).saturating_add(vec_bytes::<f64>(coarse_size).saturating_mul(2));
+        budget.check_additional(work_bytes, Some(level_idx))?;
+        let residual = try_vec_filled(0.0, n, budget, Some(level_idx))?;
+        let coarse_rhs = try_vec_filled(0.0, coarse_size, budget, Some(level_idx))?;
+        let coarse_solution = try_vec_filled(0.0, coarse_size, budget, Some(level_idx))?;
+        budget.record_retained(vec_bytes::<f64>(
+            residual.len().saturating_add(coarse_rhs.len()).saturating_add(coarse_solution.len()),
+        ));
         Ok(Self {
             a,
             p,
             r,
             relaxation,
             coarse,
-            residual: vec![0.0; n],
-            coarse_rhs: vec![0.0; coarse_size],
-            coarse_solution: vec![0.0; coarse_size],
+            residual,
+            coarse_rhs,
+            coarse_solution,
         })
     }
 
@@ -147,11 +164,11 @@ impl Level {
 
 /// Algebraic multigrid hierarchy usable directly or as a preconditioner.
 ///
-/// Build the state with [`amg_setup`] and solve the stored finest-level system
-/// with [`krylov_solve`](crate::sparse::amgcl::krylov_solve). The type owns all
-/// matrices and reusable work vectors, so [`Amg::apply`] and Krylov solves take
-/// `&mut self`. Serial cycles perform no allocation; parallel execution only
-/// adds scoped-worker bookkeeping.
+/// Build the state with [`amg_setup`] or [`amg_setup_owned`] and solve the stored
+/// finest-level system with [`krylov_solve`](crate::sparse::amgcl::krylov_solve).
+/// The type owns all matrices and reusable work vectors, so [`Amg::apply`] and
+/// Krylov solves take `&mut self`. Serial cycles perform no allocation; parallel
+/// execution only adds scoped-worker bookkeeping.
 #[derive(Debug)]
 pub struct Amg {
     /// `None` is matrix-only state: the finest matrix with no relaxation.
@@ -163,9 +180,11 @@ pub struct Amg {
     /// The levels may carry a copy with a null diagonal filled in, because a smoother cannot divide
     /// by zero; the system that is solved and whose residual the Krylov method measures is this one.
     original: Arc<CsrMatrix>,
+    /// Retained heap memory footprint in bytes.
+    retained_bytes: usize,
 }
 
-/// Builds AMG state from raw compressed sparse row (CSR) arrays.
+/// Builds AMG state from borrowed compressed sparse row (CSR) arrays.
 ///
 /// The matrix is `n` by `n` with `n = row_ptr.len() - 1`. The arrays are
 /// validated as they are copied into the private matrix: the row pointers must
@@ -181,56 +200,108 @@ pub struct Amg {
 /// # Errors
 ///
 /// [`Error::InvalidMatrix`] if the CSR arrays are malformed or the matrix is
-/// empty, and the parameter errors of the AMG hierarchy otherwise.
+/// empty, [`Error::OutOfMemory`] if `max_memory_mb` is exceeded or allocation
+/// fails, and the parameter errors of the AMG hierarchy otherwise.
 pub fn amg_setup(row_ptr: &[usize], col_idx: &[usize], values: &[f64], params: Option<AmgParams>) -> Result<Amg> {
+    let n = validate_csr_dims(row_ptr, params)?;
+    let budget = MemoryBudget::new(params.map_or(0, |p| p.max_memory_mb));
+    budget.check_additional(csr_bytes(n, values.len()), None)?;
+    let row_ptr_owned = try_clone_slice(row_ptr, &budget, None)?;
+    budget.record_retained(vec_bytes::<usize>(row_ptr_owned.len()));
+    let col_idx_owned = try_clone_slice(col_idx, &budget, None)?;
+    budget.record_retained(vec_bytes::<usize>(col_idx_owned.len()));
+    let values_owned = try_clone_slice(values, &budget, None)?;
+    budget.record_retained(vec_bytes::<f64>(values_owned.len()));
+    let matrix = CsrMatrix::from_parts(n, n, row_ptr_owned, col_idx_owned, values_owned)?;
+    amg_setup_with_budget(matrix, params, budget)
+}
+
+/// Builds AMG state by taking ownership of compressed sparse row (CSR) vectors.
+///
+/// Avoids copying the finest-level CSR buffers compared to [`amg_setup`], while
+/// enforcing the same validation and [`AmgParams::max_memory_mb`] budget.
+///
+/// # Errors
+///
+/// [`Error::InvalidMatrix`] if the CSR arrays are malformed or the matrix is
+/// empty, [`Error::OutOfMemory`] if `max_memory_mb` is exceeded or allocation
+/// fails, and the parameter errors of the AMG hierarchy otherwise.
+pub fn amg_setup_owned(row_ptr: Vec<usize>, col_idx: Vec<usize>, values: Vec<f64>, params: Option<AmgParams>) -> Result<Amg> {
+    let n = validate_csr_dims(&row_ptr, params)?;
+    let matrix = CsrMatrix::from_parts(n, n, row_ptr, col_idx, values)?;
+    let budget = MemoryBudget::new(params.map_or(0, |p| p.max_memory_mb));
+    let matrix_bytes = matrix.memory_bytes();
+    budget.check_additional(matrix_bytes, None)?;
+    budget.record_retained(matrix_bytes);
+    amg_setup_with_budget(matrix, params, budget)
+}
+
+fn validate_csr_dims(row_ptr: &[usize], params: Option<AmgParams>) -> Result<usize> {
     let n = row_ptr
         .len()
         .checked_sub(1)
         .ok_or_else(|| Error::InvalidMatrix("row_ptr must hold at least one entry".into()))?;
-    let matrix = CsrMatrix::from_parts(n, n, row_ptr.to_vec(), col_idx.to_vec(), values.to_vec())?;
-    if matrix.nrows() == 0 {
+    if n == 0 {
         return Err(Error::InvalidMatrix("AMG matrix is empty".into()));
     }
+    if let Some(p) = params {
+        p.validate()?;
+    }
+    Ok(n)
+}
+
+fn amg_setup_with_budget(matrix: CsrMatrix, params: Option<AmgParams>, budget: MemoryBudget) -> Result<Amg> {
     match params {
-        Some(params) => Amg::build(matrix, params),
-        None => Ok(Amg::matrix_only(matrix)),
+        Some(params) => Amg::build(matrix, params, budget),
+        None => Ok(Amg::matrix_only(matrix, budget)),
     }
 }
 
 impl Amg {
     /// Builds the selected AMG hierarchy and all Galerkin coarse operators.
-    fn build(matrix: CsrMatrix, params: AmgParams) -> Result<Self> {
-        params.validate()?;
-
+    fn build(matrix: CsrMatrix, params: AmgParams, budget: MemoryBudget) -> Result<Self> {
         let mut levels = Vec::new();
         // The caller's matrix is the system the Krylov method solves and measures; the hierarchy below
         // may carry a copy with a null diagonal filled in, because a smoother cannot divide by zero.
         let original = Arc::new(matrix);
-        let mut current = match Self::ensure_nonzero_diagonal(&original)? {
-            Some(filled) => Arc::new(filled),
+        let mut current = match Self::ensure_nonzero_diagonal(&original, &budget)? {
+            Some(filled) => {
+                budget.record_retained(filled.memory_bytes());
+                Arc::new(filled)
+            }
             None => Arc::clone(&original),
         };
         let mut coarsening = params.coarsening;
         loop {
+            let level_idx = levels.len();
             let n = current.nrows();
-            let may_coarsen = n > params.coarse_enough && levels.len() + 1 < params.max_levels;
+            let may_coarsen = n > params.coarse_enough && level_idx + 1 < params.max_levels;
             if may_coarsen {
-                if let Some(transfer) = transfer(&current, coarsening)? {
+                if let Some(transfer) = transfer_with_budget(&current, coarsening, &budget, level_idx)? {
                     let p = transfer.prolongation;
-                    let r = p.transpose();
-                    let ap = current.matmul_with(&p, params.parallelism)?;
-                    let mut coarse_matrix = r.matmul_with(&ap, params.parallelism)?;
+                    budget.record_retained(p.memory_bytes());
+                    let r = p.transpose_with_budget(&budget, Some(level_idx))?;
+                    budget.record_retained(r.memory_bytes());
+                    let ap = current.matmul_with_budget(&p, params.parallelism, &budget, Some(level_idx))?;
+                    let ap_bytes = ap.memory_bytes();
+                    budget.record_retained(ap_bytes);
+                    let mut coarse_matrix = r.matmul_with_budget(&ap, params.parallelism, &budget, Some(level_idx))?;
+                    drop(ap);
+                    budget.release_retained(ap_bytes);
                     coarse_matrix.scale(transfer.coarse_scale);
                     if coarse_matrix.values().iter().any(|v| !v.is_finite()) {
                         return Err(Error::NonFinite);
                     }
-                    levels.push(Level::new(
+                    budget.record_retained(coarse_matrix.memory_bytes());
+                    levels.push(Level::new_with_budget(
                         Arc::clone(&current),
                         Some(p),
                         Some(r),
                         None,
                         params.smoother,
                         params.parallelism,
+                        &budget,
+                        level_idx,
                     )?);
                     // AMGCL weakens the strength threshold on successive
                     // smoothed-aggregation levels to control operator growth.
@@ -248,14 +319,35 @@ impl Amg {
             // instead of solving, which is the standard alternative in AMG and keeps a hierarchy
             // whose Galerkin product came out semi-definite usable. `LevelInfo::direct_solver`
             // reports which one a level got.
-            let coarse = if use_direct { DenseLu::new(&current).ok() } else { None };
-            levels.push(Level::new(current, None, None, coarse, params.smoother, params.parallelism)?);
+            let coarse = if use_direct {
+                match DenseLu::new_with_budget(&current, &budget, Some(level_idx)) {
+                    Ok(lu) => {
+                        budget.record_retained(lu.memory_bytes());
+                        Some(lu)
+                    }
+                    Err(err @ Error::OutOfMemory { .. }) => return Err(err),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+            levels.push(Level::new_with_budget(
+                current,
+                None,
+                None,
+                coarse,
+                params.smoother,
+                params.parallelism,
+                &budget,
+                level_idx,
+            )?);
             break;
         }
         Ok(Self {
             params: Some(params),
             levels,
             original,
+            retained_bytes: budget.retained_bytes(),
         })
     }
 
@@ -265,36 +357,68 @@ impl Amg {
     /// so replacing a zero diagonal by one only changes the preconditioner, and it turns a hard setup
     /// failure into an unknown the smoother simply cannot help with. Matrices that already have a full
     /// diagonal are returned untouched.
-    fn ensure_nonzero_diagonal(a: &CsrMatrix) -> Result<Option<CsrMatrix>> {
+    fn ensure_nonzero_diagonal(a: &CsrMatrix, budget: &MemoryBudget) -> Result<Option<CsrMatrix>> {
         let n = a.nrows();
-        let diagonal = a.diagonal()?;
-        let missing: Vec<usize> = (0..n).filter(|&i| diagonal[i] == 0.0).collect();
-        if missing.is_empty() {
+        let diagonal = a.diagonal_with_budget(budget, None)?;
+        let _diag_guard = budget.guard(vec_bytes::<f64>(n));
+        let missing_count = diagonal.iter().filter(|&&d| d == 0.0).count();
+        if missing_count == 0 {
             return Ok(None);
         }
-        let mut triplets: Vec<(usize, usize, f64)> = Vec::with_capacity(a.values().len() + missing.len());
-        for row in 0..n {
+        let nnz_cap = a.nnz().saturating_add(missing_count);
+        let row_cap = a.max_row_nnz().saturating_add(1);
+        CsrMatrix::from_row_producer_with_budget(n, n, nnz_cap, row_cap, budget, None, |row, row_buf| {
             let entries = a.row(row);
             for (&column, &value) in entries.columns.iter().zip(entries.values) {
                 if value != 0.0 {
-                    triplets.push((row, column, value));
+                    row_buf.push((column, value));
                 }
             }
-        }
-        for i in missing {
-            triplets.push((i, i, 1.0));
-        }
-        Ok(Some(CsrMatrix::from_triplets(n, n, triplets)?))
+            if diagonal[row] == 0.0 {
+                row_buf.push((row, 1.0));
+            }
+            Ok(())
+        })
+        .map(Some)
     }
 
     /// Matrix-only state: the finest matrix and nothing else.
-    fn matrix_only(matrix: CsrMatrix) -> Self {
+    fn matrix_only(matrix: CsrMatrix, budget: MemoryBudget) -> Self {
         let original = Arc::new(matrix);
         Self {
             params: None,
             levels: vec![Level::matrix_only(Arc::clone(&original))],
             original,
+            retained_bytes: budget.retained_bytes(),
         }
+    }
+
+    /// Retained heap memory footprint in bytes across the stored matrix and AMG hierarchy.
+    pub fn memory_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+
+    #[cfg(test)]
+    pub(crate) fn computed_memory_bytes(&self) -> usize {
+        let mut total = self.original.memory_bytes();
+        for level in &self.levels {
+            if !Arc::ptr_eq(&level.a, &self.original) {
+                total = total.saturating_add(level.a.memory_bytes());
+            }
+            total = total.saturating_add(level.p.as_ref().map_or(0, CsrMatrix::memory_bytes));
+            total = total.saturating_add(level.r.as_ref().map_or(0, CsrMatrix::memory_bytes));
+            total = total.saturating_add(level.relaxation.as_ref().map_or(0, Relaxation::memory_bytes));
+            total = total.saturating_add(level.coarse.as_ref().map_or(0, DenseLu::memory_bytes));
+            total = total.saturating_add(vec_bytes::<f64>(
+                level.residual.len() + level.coarse_rhs.len() + level.coarse_solution.len(),
+            ));
+        }
+        total
+    }
+
+    /// Configured memory budget in MiB (`0` when unlimited or matrix-only).
+    pub(crate) fn max_memory_mb(&self) -> usize {
+        self.params.map_or(0, |params| params.max_memory_mb)
     }
 
     /// Returns a handle to the caller's matrix, which is the one the solve measures

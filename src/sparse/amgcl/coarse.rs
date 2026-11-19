@@ -1,5 +1,6 @@
 use crate::lapack::{LapackError, dgetrf, dgetrs};
 use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::memory::{MemoryBudget, try_vec_filled, vec_bytes};
 use crate::sparse::amgcl::{Error, Result};
 
 /// Dense LU factorization with partial pivoting for the coarsest AMG level.
@@ -14,12 +15,24 @@ pub(crate) struct DenseLu {
 }
 
 impl DenseLu {
+    #[cfg(test)]
     pub(crate) fn new(matrix: &CsrMatrix) -> Result<Self> {
+        Self::new_with_budget(matrix, &MemoryBudget::new(0), None)
+    }
+
+    pub(crate) fn new_with_budget(matrix: &CsrMatrix, budget: &MemoryBudget, level: Option<usize>) -> Result<Self> {
         if !matrix.is_square() {
             return Err(Error::InvalidMatrix("coarse direct solver requires a square matrix".into()));
         }
         let n = matrix.nrows();
-        let mut lu = dense_from_csr(matrix, n);
+        let dense_len = n.saturating_mul(n);
+        let dense_bytes = vec_bytes::<f64>(dense_len);
+        let pivots_bytes = vec_bytes::<usize>(n);
+        budget.check_additional(dense_bytes.saturating_add(pivots_bytes), level)?;
+        let exact_dense_len = n.checked_mul(n).ok_or_else(|| budget.alloc_error(usize::MAX, level))?;
+
+        let mut lu = try_vec_filled(0.0, exact_dense_len, budget, level)?;
+        fill_dense_from_csr(matrix, n, &mut lu);
 
         // First attempt: the operator as the Galerkin product produced it.
         match dgetrf(&mut lu, n) {
@@ -36,7 +49,7 @@ impl DenseLu {
         // an exactly singular operator into a well-posed one.
         let scale = matrix_scale(matrix);
         for factor in SHIFT_FACTORS {
-            let mut lu = dense_from_csr(matrix, n);
+            fill_dense_from_csr(matrix, n, &mut lu);
             apply_shift(&mut lu, n, factor * scale);
             match dgetrf(&mut lu, n) {
                 Ok((pivots, _determinant)) => return Ok(Self { lu, pivots }),
@@ -45,9 +58,13 @@ impl DenseLu {
             }
         }
 
-        let unshifted = dense_from_csr(matrix, n);
-        let row = (0..n).find(|&i| unshifted[i + i * n] == 0.0).unwrap_or(0);
+        fill_dense_from_csr(matrix, n, &mut lu);
+        let row = (0..n).find(|&i| lu[i + i * n] == 0.0).unwrap_or(0);
         Err(Error::SingularMatrix { row })
+    }
+
+    pub(crate) fn memory_bytes(&self) -> usize {
+        vec_bytes::<f64>(self.lu.len()).saturating_add(vec_bytes::<usize>(self.pivots.len()))
     }
 
     pub(crate) fn solve(&self, rhs: &[f64], x: &mut [f64]) {
@@ -61,16 +78,15 @@ impl DenseLu {
 /// Relative diagonal shifts tried, in order, when the coarse operator is singular
 const SHIFT_FACTORS: [f64; 4] = [1.0e-12, 1.0e-10, 1.0e-8, 1.0e-6];
 
-/// Converts the coarse CSR matrix to the crate's column-major dense layout
-fn dense_from_csr(matrix: &CsrMatrix, n: usize) -> Vec<f64> {
-    let mut lu = vec![0.0; n * n];
+/// Converts the coarse CSR matrix to the crate's column-major dense layout inside `lu`
+fn fill_dense_from_csr(matrix: &CsrMatrix, n: usize, lu: &mut [f64]) {
+    lu.fill(0.0);
     for row in 0..n {
         let entries = matrix.row(row);
         for (&column, &value) in entries.columns.iter().zip(entries.values) {
             lu[row + column * n] += value;
         }
     }
-    lu
 }
 
 /// Largest absolute entry of the matrix, and one for an all-zero operator

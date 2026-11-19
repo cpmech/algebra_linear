@@ -1,5 +1,6 @@
 use super::{Problem, SolveReport, SolverParams, prepare, report};
 use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::memory::{MemoryBudget, try_vec_filled, vec_bytes};
 use crate::sparse::amgcl::parallel::for_each_mut;
 use crate::sparse::amgcl::preconditioner::Preconditioner;
 use crate::sparse::amgcl::vector::{axpy_with, check_finite_with, dot_with, norm_with};
@@ -19,7 +20,21 @@ impl Cg {
     }
 
     /// Solves `A x = rhs`, using `x` as the initial guess and output.
+    #[cfg(test)]
     pub fn solve<P: Preconditioner + ?Sized>(&self, a: &CsrMatrix, preconditioner: &mut P, rhs: &[f64], x: &mut [f64]) -> Result<SolveReport> {
+        let budget = MemoryBudget::new(self.params.max_memory_mb);
+        self.solve_with_budget(a, preconditioner, rhs, x, &budget)
+    }
+
+    /// Solves `A x = rhs` while enforcing `budget`.
+    pub(crate) fn solve_with_budget<P: Preconditioner + ?Sized>(
+        &self,
+        a: &CsrMatrix,
+        preconditioner: &mut P,
+        rhs: &[f64],
+        x: &mut [f64],
+        budget: &MemoryBudget,
+    ) -> Result<SolveReport> {
         let Problem { norm_rhs, target } = prepare(a, rhs, x, self.params)?;
         let parallel = self.params.parallelism;
         if norm_rhs == 0.0 {
@@ -31,10 +46,11 @@ impl Cg {
             });
         }
         let n = a.nrows();
-        let mut r = vec![0.0; n];
-        let mut z = vec![0.0; n];
-        let mut p = vec![0.0; n];
-        let mut q = vec![0.0; n];
+        budget.check_additional(vec_bytes::<f64>(n).saturating_mul(4), None)?;
+        let mut r = try_vec_filled(0.0, n, budget, None)?;
+        let mut z = try_vec_filled(0.0, n, budget, None)?;
+        let mut p = try_vec_filled(0.0, n, budget, None)?;
+        let mut q = try_vec_filled(0.0, n, budget, None)?;
         a.residual_unchecked_with(rhs, x, &mut r, parallel);
         let mut residual = norm_with(&r, parallel);
         if residual <= target {

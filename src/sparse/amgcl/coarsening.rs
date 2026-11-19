@@ -5,6 +5,7 @@ mod aggregation;
 pub use aggregation::{AggregationParams, PlainAggregationParams, SmoothedAggregationParams};
 
 use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::memory::{BudgetGuard, MemoryBudget, try_clone_slice, try_vec_filled, vec_bytes};
 use crate::sparse::amgcl::{Error, Result};
 use aggregation::Transfer;
 
@@ -73,35 +74,38 @@ impl Coarsening {
     }
 }
 
-pub(crate) fn transfer(a: &CsrMatrix, params: Coarsening) -> Result<Option<Transfer>> {
+pub(crate) fn transfer_with_budget(a: &CsrMatrix, params: Coarsening, budget: &MemoryBudget, level: usize) -> Result<Option<Transfer>> {
     match params {
-        Coarsening::RugeStuben(params) => prolongation(a, params).map(|p| {
+        Coarsening::RugeStuben(params) => prolongation(a, params, budget, level).map(|p| {
             p.map(|prolongation| Transfer {
                 prolongation,
                 coarse_scale: 1.0,
             })
         }),
-        Coarsening::Aggregation(params) => aggregation::aggregation(a, params),
-        Coarsening::SmoothedAggregation(params) => aggregation::smoothed_aggregation(a, params),
+        Coarsening::Aggregation(params) => aggregation::aggregation(a, params, budget, level),
+        Coarsening::SmoothedAggregation(params) => aggregation::smoothed_aggregation(a, params, budget, level),
     }
 }
 
-struct Strength {
+struct Strength<'a> {
     /// Strong-connection flags indexed exactly like `A.values`.
     aligned: Vec<bool>,
     /// Transposed strong graph in CSR form (without values).
     transpose_offsets: Vec<usize>,
     transpose_columns: Vec<usize>,
+    _guard: BudgetGuard<'a>,
 }
 
 /// Constructs prolongation `P`; restriction is `P^T`.
-pub(crate) fn prolongation(a: &CsrMatrix, params: CoarseningParams) -> Result<Option<CsrMatrix>> {
+pub(crate) fn prolongation(a: &CsrMatrix, params: CoarseningParams, budget: &MemoryBudget, level: usize) -> Result<Option<CsrMatrix>> {
     let n = a.nrows();
-    let mut cf = vec![U; n];
-    let strength = connect(a, params.eps_strong, &mut cf);
-    cfsplit(a, &strength, &mut cf);
+    let mut cf = try_vec_filled(U, n, budget, Some(level))?;
+    let _cf_guard = budget.guard(vec_bytes::<u8>(n));
+    let strength = connect(a, params.eps_strong, &mut cf, budget, level)?;
+    cfsplit(a, &strength, &mut cf, budget, level)?;
 
-    let mut coarse_index = vec![usize::MAX; n];
+    let mut coarse_index = try_vec_filled(usize::MAX, n, budget, Some(level))?;
+    let _coarse_idx_guard = budget.guard(vec_bytes::<usize>(n));
     let mut coarse_count = 0;
     for (i, &marker) in cf.iter().enumerate() {
         if marker == C {
@@ -113,11 +117,25 @@ pub(crate) fn prolongation(a: &CsrMatrix, params: CoarseningParams) -> Result<Op
         return Ok(None);
     }
 
-    let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+    let mut p_nnz_cap = coarse_count;
+    let mut row_cap = 1_usize;
     for i in 0..n {
+        if cf[i] != C {
+            let mut count = 0_usize;
+            for index in a.row_offsets()[i]..a.row_offsets()[i + 1] {
+                if strength.aligned[index] && cf[a.col_indices()[index]] == C {
+                    count += 1;
+                }
+            }
+            p_nnz_cap += count;
+            row_cap = row_cap.max(count);
+        }
+    }
+
+    CsrMatrix::from_row_producer_with_budget(n, coarse_count, p_nnz_cap, row_cap, budget, Some(level), |i, row_buf| {
         if cf[i] == C {
-            rows[i].push((coarse_index[i], 1.0));
-            continue;
+            row_buf.push((coarse_index[i], 1.0));
+            return Ok(());
         }
 
         let row_start = a.row_offsets()[i];
@@ -211,21 +229,18 @@ pub(crate) fn prolongation(a: &CsrMatrix, params: CoarseningParams) -> Result<Op
             }
             let weight = if value < 0.0 { alpha } else { beta } * value;
             if weight != 0.0 {
-                rows[i].push((coarse_index[column], weight));
+                row_buf.push((coarse_index[column], weight));
             }
         }
-    }
-
-    let triplets = rows
-        .into_iter()
-        .enumerate()
-        .flat_map(|(row, entries)| entries.into_iter().map(move |(column, value)| (row, column, value)));
-    CsrMatrix::from_triplets(n, coarse_count, triplets).map(Some)
+        Ok(())
+    })
+    .map(Some)
 }
 
-fn connect(a: &CsrMatrix, eps_strong: f64, cf: &mut [u8]) -> Strength {
+fn connect<'a>(a: &CsrMatrix, eps_strong: f64, cf: &mut [u8], budget: &'a MemoryBudget, level: usize) -> Result<Strength<'a>> {
     let n = a.nrows();
-    let mut aligned = vec![false; a.nnz()];
+    let mut aligned = try_vec_filled(false, a.nnz(), budget, Some(level))?;
+    let mut guard = budget.guard(vec_bytes::<bool>(a.nnz()));
     for (i, marker) in cf.iter_mut().enumerate() {
         let start = a.row_offsets()[i];
         let end = a.row_offsets()[i + 1];
@@ -245,7 +260,8 @@ fn connect(a: &CsrMatrix, eps_strong: f64, cf: &mut [u8]) -> Strength {
         }
     }
 
-    let mut transpose_offsets = vec![0; n + 1];
+    let mut transpose_offsets = try_vec_filled(0, n + 1, budget, Some(level))?;
+    guard.merge(budget.guard(vec_bytes::<usize>(n + 1)));
     for (index, &strong) in aligned.iter().enumerate() {
         if strong {
             transpose_offsets[a.col_indices()[index] + 1] += 1;
@@ -254,8 +270,13 @@ fn connect(a: &CsrMatrix, eps_strong: f64, cf: &mut [u8]) -> Strength {
     for i in 0..n {
         transpose_offsets[i + 1] += transpose_offsets[i];
     }
-    let mut next = transpose_offsets[..n].to_vec();
-    let mut transpose_columns = vec![0; transpose_offsets[n]];
+    let next_bytes = vec_bytes::<usize>(n);
+    let tcol_bytes = vec_bytes::<usize>(transpose_offsets[n]);
+    budget.check_additional(next_bytes.saturating_add(tcol_bytes), Some(level))?;
+    let mut next = try_clone_slice(&transpose_offsets[..n], budget, Some(level))?;
+    let _next_guard = budget.guard(next_bytes);
+    let mut transpose_columns = try_vec_filled(0, transpose_offsets[n], budget, Some(level))?;
+    guard.merge(budget.guard(tcol_bytes));
     for i in 0..n {
         for index in a.row_offsets()[i]..a.row_offsets()[i + 1] {
             if aligned[index] {
@@ -265,31 +286,34 @@ fn connect(a: &CsrMatrix, eps_strong: f64, cf: &mut [u8]) -> Strength {
             }
         }
     }
-    Strength {
+    Ok(Strength {
         aligned,
         transpose_offsets,
         transpose_columns,
-    }
+        _guard: guard,
+    })
 }
 
 /// First-pass Ruge–Stüben C/F splitting. This follows AMGCL's bucketed
 /// implementation so that strong-neighbor measures are updated incrementally.
-fn cfsplit(a: &CsrMatrix, strength: &Strength, cf: &mut [u8]) {
+fn cfsplit(a: &CsrMatrix, strength: &Strength<'_>, cf: &mut [u8], budget: &MemoryBudget, level: usize) -> Result<()> {
     let n = a.nrows();
     if n == 0 {
-        return;
+        return Ok(());
     }
-    let mut lambda = vec![0_usize; n];
+    let work_bytes = vec_bytes::<usize>(n.saturating_mul(5).saturating_add(1));
+    budget.check_additional(work_bytes, Some(level))?;
+    let mut lambda = try_vec_filled(0_usize, n, budget, Some(level))?;
     for (i, measure) in lambda.iter_mut().enumerate() {
         for index in strength.transpose_offsets[i]..strength.transpose_offsets[i + 1] {
             *measure += if cf[strength.transpose_columns[index]] == U { 1 } else { 2 };
         }
     }
 
-    let mut group_start = vec![0_usize; n + 1];
-    let mut group_count = vec![0_usize; n];
-    let mut position_to_node = vec![0_usize; n];
-    let mut node_to_position = vec![0_usize; n];
+    let mut group_start = try_vec_filled(0_usize, n + 1, budget, Some(level))?;
+    let mut group_count = try_vec_filled(0_usize, n, budget, Some(level))?;
+    let mut position_to_node = try_vec_filled(0_usize, n, budget, Some(level))?;
+    let mut node_to_position = try_vec_filled(0_usize, n, budget, Some(level))?;
     for &measure in &lambda {
         group_start[measure + 1] += 1;
     }
@@ -366,6 +390,7 @@ fn cfsplit(a: &CsrMatrix, strength: &Strength, cf: &mut [u8]) {
             lambda[neighbor] = old_measure - 1;
         }
     }
+    Ok(())
 }
 
 fn swap_positions(first: usize, second: usize, position_to_node: &mut [usize], node_to_position: &mut [usize]) {

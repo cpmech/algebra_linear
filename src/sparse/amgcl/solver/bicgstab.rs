@@ -1,5 +1,6 @@
 use super::{Problem, SolveReport, SolverParams, prepare, report};
 use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::memory::{MemoryBudget, try_clone_slice, try_vec_filled, vec_bytes};
 use crate::sparse::amgcl::parallel::for_each_mut;
 use crate::sparse::amgcl::preconditioner::Preconditioner;
 use crate::sparse::amgcl::vector::{axpy_with, check_finite_with, dot_with, norm_with};
@@ -19,7 +20,21 @@ impl BiCgStab {
     }
 
     /// Solves `A x = rhs`, using `x` as the initial guess and output.
+    #[cfg(test)]
     pub fn solve<P: Preconditioner + ?Sized>(&self, a: &CsrMatrix, preconditioner: &mut P, rhs: &[f64], x: &mut [f64]) -> Result<SolveReport> {
+        let budget = MemoryBudget::new(self.params.max_memory_mb);
+        self.solve_with_budget(a, preconditioner, rhs, x, &budget)
+    }
+
+    /// Solves `A x = rhs` while enforcing `budget`.
+    pub(crate) fn solve_with_budget<P: Preconditioner + ?Sized>(
+        &self,
+        a: &CsrMatrix,
+        preconditioner: &mut P,
+        rhs: &[f64],
+        x: &mut [f64],
+        budget: &MemoryBudget,
+    ) -> Result<SolveReport> {
         let Problem { norm_rhs, target } = prepare(a, rhs, x, self.params)?;
         let parallel = self.params.parallelism;
         if norm_rhs == 0.0 {
@@ -31,15 +46,16 @@ impl BiCgStab {
             });
         }
         let n = a.nrows();
-        let mut r = vec![0.0; n];
-        let mut p = vec![0.0; n];
-        let mut v = vec![0.0; n];
-        let mut s = vec![0.0; n];
-        let mut t = vec![0.0; n];
-        let mut phat = vec![0.0; n];
-        let mut shat = vec![0.0; n];
+        budget.check_additional(vec_bytes::<f64>(n).saturating_mul(8), None)?;
+        let mut r = try_vec_filled(0.0, n, budget, None)?;
+        let mut p = try_vec_filled(0.0, n, budget, None)?;
+        let mut v = try_vec_filled(0.0, n, budget, None)?;
+        let mut s = try_vec_filled(0.0, n, budget, None)?;
+        let mut t = try_vec_filled(0.0, n, budget, None)?;
+        let mut phat = try_vec_filled(0.0, n, budget, None)?;
+        let mut shat = try_vec_filled(0.0, n, budget, None)?;
         a.residual_unchecked_with(rhs, x, &mut r, parallel);
-        let r_hat = r.clone();
+        let r_hat = try_clone_slice(&r, budget, None)?;
         let mut residual = norm_with(&r, parallel);
         if residual <= target {
             return Ok(report(0, residual, norm_rhs, target));

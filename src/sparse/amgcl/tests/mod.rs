@@ -3,6 +3,7 @@ mod api;
 mod coarse_singular;
 mod irregular;
 mod matrix;
+mod memory;
 #[cfg(not(target_arch = "wasm32"))]
 mod parallel;
 mod relaxation;

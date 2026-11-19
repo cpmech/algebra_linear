@@ -1,6 +1,10 @@
 //! Serial relaxation schemes and their per-level setup data.
 
 use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::memory::{
+    MemoryBudget, csr_bytes, out_of_memory, try_clone_slice, try_reserve_vec_filled, try_reserve_vec_with_capacity, try_vec_filled,
+    try_vec_with_capacity, vec_bytes,
+};
 use crate::sparse::amgcl::parallel::{Parallelism, for_each_mut, map_chunks};
 use crate::sparse::amgcl::vector::{axpy_with, norm, norm_with};
 use crate::sparse::amgcl::{Error, Result};
@@ -102,22 +106,42 @@ pub(crate) enum Relaxation {
 impl Relaxation {
     #[cfg(test)]
     pub(crate) fn new(a: &CsrMatrix, smoother: Smoother) -> Result<Self> {
-        Self::new_with(a, smoother, Parallelism::default())
+        Self::new_with_budget(a, smoother, Parallelism::default(), &MemoryBudget::new(0), None)
     }
 
-    pub(crate) fn new_with(a: &CsrMatrix, smoother: Smoother, parallel: Parallelism) -> Result<Self> {
+    pub(crate) fn new_with_budget(
+        a: &CsrMatrix,
+        smoother: Smoother,
+        parallel: Parallelism,
+        budget: &MemoryBudget,
+        level: Option<usize>,
+    ) -> Result<Self> {
         match smoother {
             Smoother::GaussSeidel => Ok(Self::GaussSeidel {
-                inverse_diagonal: inverse_diagonal(a)?,
+                inverse_diagonal: inverse_diagonal_with_budget(a, budget, level)?,
             }),
             Smoother::DampedJacobi(damping) => Ok(Self::DampedJacobi {
                 damping,
-                inverse_diagonal: inverse_diagonal(a)?,
+                inverse_diagonal: inverse_diagonal_with_budget(a, budget, level)?,
             }),
-            Smoother::Ilu0(params) => Ok(Self::Ilu0(IncompleteLu::new(a, params)?)),
-            Smoother::Chebyshev(params) => Ok(Self::Chebyshev(Chebyshev::new_with(a, params, parallel)?)),
-            Smoother::Spai0 => Ok(Self::Spai0(spai0_with(a, parallel)?)),
-            Smoother::Spai1 => Ok(Self::Spai1(spai1_with(a, parallel)?)),
+            Smoother::Ilu0(params) => Ok(Self::Ilu0(IncompleteLu::new_with_budget(a, params, budget, level)?)),
+            Smoother::Chebyshev(params) => Ok(Self::Chebyshev(Chebyshev::new_with_budget(a, params, parallel, budget, level)?)),
+            Smoother::Spai0 => Ok(Self::Spai0(spai0_with_budget(a, parallel, budget, level)?)),
+            Smoother::Spai1 => Ok(Self::Spai1(spai1_with_budget(a, parallel, budget, level)?)),
+        }
+    }
+
+    pub(crate) fn memory_bytes(&self) -> usize {
+        match self {
+            Self::GaussSeidel { inverse_diagonal } | Self::DampedJacobi { inverse_diagonal, .. } => vec_bytes::<f64>(inverse_diagonal.len()),
+            Self::Ilu0(ilu) => ilu
+                .lower
+                .memory_bytes()
+                .saturating_add(ilu.upper.memory_bytes())
+                .saturating_add(vec_bytes::<f64>(ilu.inverse_diagonal.len())),
+            Self::Chebyshev(cheb) => vec_bytes::<f64>(cheb.inverse_diagonal.len()).saturating_add(vec_bytes::<f64>(cheb.polynomial.len())),
+            Self::Spai0(inverse) => vec_bytes::<f64>(inverse.len()),
+            Self::Spai1(inverse) => inverse.memory_bytes(),
         }
     }
 
@@ -175,16 +199,15 @@ impl Relaxation {
     }
 }
 
-pub(crate) fn inverse_diagonal(a: &CsrMatrix) -> Result<Vec<f64>> {
-    let diagonal = a.diagonal()?;
-    let mut inverse = Vec::with_capacity(diagonal.len());
-    for (row, value) in diagonal.into_iter().enumerate() {
-        if value == 0.0 || !value.is_finite() {
+pub(crate) fn inverse_diagonal_with_budget(a: &CsrMatrix, budget: &MemoryBudget, level: Option<usize>) -> Result<Vec<f64>> {
+    let mut diagonal = a.diagonal_with_budget(budget, level)?;
+    for (row, value) in diagonal.iter_mut().enumerate() {
+        if *value == 0.0 || !value.is_finite() {
             return Err(Error::SingularMatrix { row });
         }
-        inverse.push(1.0 / value);
+        *value = 1.0 / *value;
     }
-    Ok(inverse)
+    Ok(diagonal)
 }
 
 fn gauss_seidel_row(a: &CsrMatrix, inverse_diagonal: &[f64], i: usize, rhs: &[f64], x: &mut [f64]) {
@@ -207,18 +230,36 @@ pub(crate) struct IncompleteLu {
 }
 
 impl IncompleteLu {
-    fn new(a: &CsrMatrix, params: Ilu0Params) -> Result<Self> {
-        let a = a.canonicalized()?;
+    fn new_with_budget(a: &CsrMatrix, params: Ilu0Params, budget: &MemoryBudget, level: Option<usize>) -> Result<Self> {
+        let a = a.canonicalized_with_budget(budget, level)?;
+        let _a_guard = budget.guard(a.memory_bytes());
         let n = a.nrows();
-        let mut lower_offsets = vec![0; n + 1];
-        let mut upper_offsets = vec![0; n + 1];
-        let mut lower_columns = Vec::with_capacity(a.nnz());
-        let mut upper_columns = Vec::with_capacity(a.nnz());
-        let mut lower_values = Vec::with_capacity(a.nnz());
-        let mut upper_values = Vec::with_capacity(a.nnz());
-        let mut inverse_diagonal = vec![0.0; n];
-        let mut work = vec![0.0; n];
-        let mut position = vec![usize::MAX; n];
+        let mut lower_nnz = 0_usize;
+        let mut upper_nnz = 0_usize;
+        for i in 0..n {
+            for &column in a.row(i).columns {
+                if column < i {
+                    lower_nnz += 1;
+                } else if column > i {
+                    upper_nnz += 1;
+                }
+            }
+        }
+        let factor_bytes = csr_bytes(n, lower_nnz)
+            .saturating_add(csr_bytes(n, upper_nnz))
+            .saturating_add(vec_bytes::<f64>(n));
+        let temp_bytes = vec_bytes::<f64>(n).saturating_add(vec_bytes::<usize>(n));
+        budget.check_additional(factor_bytes.saturating_add(temp_bytes), level)?;
+
+        let mut lower_offsets = try_vec_filled(0, n + 1, budget, level)?;
+        let mut upper_offsets = try_vec_filled(0, n + 1, budget, level)?;
+        let mut lower_columns = try_vec_with_capacity::<usize>(lower_nnz, budget, level)?;
+        let mut upper_columns = try_vec_with_capacity::<usize>(upper_nnz, budget, level)?;
+        let mut lower_values = try_vec_with_capacity::<f64>(lower_nnz, budget, level)?;
+        let mut upper_values = try_vec_with_capacity::<f64>(upper_nnz, budget, level)?;
+        let mut inverse_diagonal = try_vec_filled(0.0, n, budget, level)?;
+        let mut work = try_vec_filled(0.0, n, budget, level)?;
+        let mut position = try_vec_filled(usize::MAX, n, budget, level)?;
 
         for i in 0..n {
             let row_start = a.row_offsets()[i];
@@ -318,9 +359,14 @@ pub(crate) struct Chebyshev {
 }
 
 impl Chebyshev {
-    fn new_with(a: &CsrMatrix, params: ChebyshevParams, parallel: Parallelism) -> Result<Self> {
-        let inverse_diagonal = if params.scale { inverse_diagonal(a)? } else { Vec::new() };
-        let radius = spectral_radius_with(a, params.power_iterations, &inverse_diagonal, parallel)?;
+    fn new_with_budget(a: &CsrMatrix, params: ChebyshevParams, parallel: Parallelism, budget: &MemoryBudget, level: Option<usize>) -> Result<Self> {
+        let inverse_diagonal = if params.scale {
+            inverse_diagonal_with_budget(a, budget, level)?
+        } else {
+            Vec::new()
+        };
+        let _inv_guard = budget.guard(vec_bytes::<f64>(inverse_diagonal.len()));
+        let radius = spectral_radius_with_budget(a, params.power_iterations, &inverse_diagonal, parallel, budget, level)?;
         if radius <= 0.0 || !radius.is_finite() {
             return Err(Error::InvalidMatrix(
                 "Chebyshev smoother requires a positive finite spectral radius".into(),
@@ -333,13 +379,14 @@ impl Chebyshev {
         if center == 0.0 || !center.is_finite() || !semi_axis.is_finite() {
             return Err(Error::InvalidParameter("Chebyshev spectral interval is degenerate".into()));
         }
+        let polynomial = try_vec_filled(0.0, a.nrows(), budget, level)?;
         Ok(Self {
             degree: params.degree,
             scale: params.scale,
             inverse_diagonal,
             center,
             semi_axis,
-            polynomial: vec![0.0; a.nrows()],
+            polynomial,
         })
     }
 
@@ -372,17 +419,26 @@ impl Chebyshev {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn spectral_radius(a: &CsrMatrix, power_iterations: usize, inverse_diagonal: &[f64]) -> Result<f64> {
-    spectral_radius_with(a, power_iterations, inverse_diagonal, Parallelism::default())
+    spectral_radius_with_budget(a, power_iterations, inverse_diagonal, Parallelism::default(), &MemoryBudget::new(0), None)
 }
 
-pub(crate) fn spectral_radius_with(a: &CsrMatrix, power_iterations: usize, inverse_diagonal: &[f64], parallel: Parallelism) -> Result<f64> {
+pub(crate) fn spectral_radius_with_budget(
+    a: &CsrMatrix,
+    power_iterations: usize,
+    inverse_diagonal: &[f64],
+    parallel: Parallelism,
+    budget: &MemoryBudget,
+    level: Option<usize>,
+) -> Result<f64> {
     if power_iterations == 0 {
         return Ok(gershgorin_radius(a, inverse_diagonal));
     }
     let n = a.nrows();
+    budget.check_additional(vec_bytes::<f64>(n).saturating_mul(2), level)?;
     let mut state = 0x4d59_5df4_d0f3_3173_u64;
-    let mut current = Vec::with_capacity(n);
+    let mut current = try_vec_with_capacity::<f64>(n, budget, level)?;
     for _ in 0..n {
         state ^= state >> 12;
         state ^= state << 25;
@@ -390,6 +446,7 @@ pub(crate) fn spectral_radius_with(a: &CsrMatrix, power_iterations: usize, inver
         let uniform = ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 11) as f64) * (1.0 / ((1_u64 << 53) as f64));
         current.push(2.0 * uniform - 1.0);
     }
+    let _current_guard = budget.guard(vec_bytes::<f64>(n));
     let initial_norm = norm_with(&current, parallel);
     if initial_norm == 0.0 {
         return Ok(gershgorin_radius(a, inverse_diagonal));
@@ -399,7 +456,7 @@ pub(crate) fn spectral_radius_with(a: &CsrMatrix, power_iterations: usize, inver
             *value /= initial_norm;
         }
     });
-    let mut next = vec![0.0; n];
+    let mut next = try_vec_filled(0.0, n, budget, level)?;
     let mut radius = 0.0;
     for iteration in 0..power_iterations {
         a.spmv_unchecked_with(&current, &mut next, parallel);
@@ -453,9 +510,12 @@ fn gershgorin_radius(a: &CsrMatrix, inverse_diagonal: &[f64]) -> f64 {
     radius
 }
 
-fn spai0_with(a: &CsrMatrix, parallel: Parallelism) -> Result<Vec<f64>> {
-    let chunks = map_chunks(a.nrows(), parallel, |start, end| {
-        let mut inverse = Vec::with_capacity(end - start);
+fn spai0_with_budget(a: &CsrMatrix, parallel: Parallelism, budget: &MemoryBudget, level: Option<usize>) -> Result<Vec<f64>> {
+    let n = a.nrows();
+    budget.check_additional(vec_bytes::<f64>(n).saturating_mul(2), level)?;
+    let budget_mb = budget.budget_mb();
+    let raw_chunks = map_chunks(n, parallel, |start, end| {
+        let mut inverse = try_reserve_vec_with_capacity(end - start, budget_mb, level)?;
         for i in start..end {
             let mut numerator = 0.0;
             let mut denominator = 0.0;
@@ -473,19 +533,30 @@ fn spai0_with(a: &CsrMatrix, parallel: Parallelism) -> Result<Vec<f64>> {
         }
         Ok(inverse)
     });
-    let mut inverse = Vec::with_capacity(a.nrows());
+    let mut chunks = try_vec_with_capacity(raw_chunks.len(), budget, level)?;
+    for chunk in raw_chunks {
+        chunks.push(chunk?);
+    }
+    let _chunks_guard = budget.guard(vec_bytes::<f64>(n));
+    let mut inverse = try_vec_with_capacity(n, budget, level)?;
     for chunk in chunks {
-        inverse.extend(chunk?);
+        inverse.extend(chunk);
     }
     Ok(inverse)
 }
 
-fn spai1_with(a: &CsrMatrix, parallel: Parallelism) -> Result<CsrMatrix> {
-    let a = a.canonicalized()?;
+fn spai1_with_budget(a: &CsrMatrix, parallel: Parallelism, budget: &MemoryBudget, level: Option<usize>) -> Result<CsrMatrix> {
+    let a = a.canonicalized_with_budget(budget, level)?;
+    let _a_guard = budget.guard(a.memory_bytes());
     let n = a.nrows();
-    let chunks = map_chunks(n, parallel, |start, end| -> Result<Vec<f64>> {
-        let mut inverse_values = Vec::with_capacity(a.row_offsets()[end] - a.row_offsets()[start]);
-        let mut marker = vec![usize::MAX; n];
+    let workers = parallel.workers(n);
+    let marker_bytes = workers.saturating_mul(vec_bytes::<usize>(n));
+    budget.check_additional(marker_bytes.saturating_add(csr_bytes(n, a.nnz())), level)?;
+
+    let budget_mb = budget.budget_mb();
+    let raw_chunks = map_chunks(n, parallel, |start, end| -> Result<Vec<f64>> {
+        let mut inverse_values = try_reserve_vec_with_capacity(a.row_offsets()[end] - a.row_offsets()[start], budget_mb, level)?;
+        let mut marker = try_reserve_vec_filled(usize::MAX, n, budget_mb, level)?;
         let mut neighborhood = Vec::new();
 
         for i in start..end {
@@ -501,6 +572,11 @@ fn spai1_with(a: &CsrMatrix, parallel: Parallelism) -> Result<CsrMatrix> {
                     let reachable = a.col_indices()[index];
                     if marker[reachable] == usize::MAX {
                         marker[reachable] = 0;
+                        if neighborhood.len() == neighborhood.capacity() {
+                            neighborhood
+                                .try_reserve(1)
+                                .map_err(|_| out_of_memory(vec_bytes::<usize>(neighborhood.len().saturating_add(1)), budget_mb, level))?;
+                        }
                         neighborhood.push(reachable);
                     }
                 }
@@ -511,8 +587,9 @@ fn spai1_with(a: &CsrMatrix, parallel: Parallelism) -> Result<CsrMatrix> {
             for (row, &original) in neighborhood.iter().enumerate() {
                 marker[original] = row;
             }
-            let mut local = vec![0.0; rows * cols];
-            let mut rhs = vec![0.0; rows];
+            let local_len = rows.checked_mul(cols).ok_or_else(|| out_of_memory(usize::MAX, budget_mb, level))?;
+            let mut local = try_reserve_vec_filled(0.0, local_len, budget_mb, level)?;
+            let mut rhs = try_reserve_vec_filled(0.0, rows, budget_mb, level)?;
             for (row, &original) in neighborhood.iter().enumerate() {
                 if original == i {
                     rhs[row] = 1.0;
@@ -524,8 +601,11 @@ fn spai1_with(a: &CsrMatrix, parallel: Parallelism) -> Result<CsrMatrix> {
                     local[local_row * cols + local_column] = a.values()[index];
                 }
             }
-            let solution = least_squares(&local, rows, cols, &rhs)
-                .map_err(|_| Error::InvalidMatrix(format!("SPAI(1) neighborhood for row {i} is rank deficient")))?;
+            let solution = match least_squares(&local, rows, cols, &rhs, budget_mb, level) {
+                Ok(sol) => sol,
+                Err(err @ Error::OutOfMemory { .. }) => return Err(err),
+                Err(_) => return Err(Error::InvalidMatrix(format!("SPAI(1) neighborhood for row {i} is rank deficient"))),
+            };
             inverse_values.extend(solution);
             for &original in &neighborhood {
                 marker[original] = usize::MAX;
@@ -533,25 +613,38 @@ fn spai1_with(a: &CsrMatrix, parallel: Parallelism) -> Result<CsrMatrix> {
         }
         Ok(inverse_values)
     });
-    let mut inverse_values = Vec::with_capacity(a.nnz());
-    for chunk in chunks {
-        inverse_values.extend(chunk?);
+    let mut chunks = try_vec_with_capacity(raw_chunks.len(), budget, level)?;
+    for chunk in raw_chunks {
+        chunks.push(chunk?);
     }
+    let _chunks_guard = budget.guard(vec_bytes::<f64>(a.nnz()));
+    budget.check_additional(csr_bytes(n, a.nnz()), level)?;
+    let mut inverse_values = try_vec_with_capacity::<f64>(a.nnz(), budget, level)?;
+    for chunk in chunks {
+        inverse_values.extend(chunk);
+    }
+    drop(_chunks_guard);
+    let _vals_guard = budget.guard(vec_bytes::<f64>(inverse_values.len()));
+    let row_offsets = try_clone_slice(a.row_offsets(), budget, level)?;
+    let _rows_guard = budget.guard(vec_bytes::<usize>(row_offsets.len()));
+    let col_indices = try_clone_slice(a.col_indices(), budget, level)?;
 
-    CsrMatrix::from_parts(n, n, a.row_offsets().to_vec(), a.col_indices().to_vec(), inverse_values)
+    CsrMatrix::from_parts(n, n, row_offsets, col_indices, inverse_values)
 }
 
 /// Full-rank least squares. Tall systems use B=QR; wide systems use Bᵀ=QR
 /// and return the minimum-norm solution.
-fn least_squares(matrix: &[f64], rows: usize, cols: usize, rhs: &[f64]) -> Result<Vec<f64>> {
+fn least_squares(matrix: &[f64], rows: usize, cols: usize, rhs: &[f64], budget_mb: usize, level: Option<usize>) -> Result<Vec<f64>> {
     if rows >= cols {
-        let mut factor = matrix.to_vec();
-        let reflectors = householder_qr(&mut factor, rows, cols)?;
-        let mut transformed = rhs.to_vec();
+        let mut factor = try_reserve_vec_with_capacity::<f64>(matrix.len(), budget_mb, level)?;
+        factor.extend_from_slice(matrix);
+        let reflectors = householder_qr(&mut factor, rows, cols, budget_mb, level)?;
+        let mut transformed = try_reserve_vec_with_capacity::<f64>(rhs.len(), budget_mb, level)?;
+        transformed.extend_from_slice(rhs);
         for (k, reflector) in reflectors.iter().enumerate() {
             apply_reflector(k, reflector, &mut transformed);
         }
-        let mut solution = vec![0.0; cols];
+        let mut solution = try_reserve_vec_filled(0.0, cols, budget_mb, level)?;
         for i in (0..cols).rev() {
             let mut value = transformed[i];
             for j in i + 1..cols {
@@ -566,14 +659,14 @@ fn least_squares(matrix: &[f64], rows: usize, cols: usize, rhs: &[f64]) -> Resul
         Ok(solution)
     } else {
         // Transpose into an cols-by-rows tall matrix.
-        let mut factor = vec![0.0; matrix.len()];
+        let mut factor = try_reserve_vec_filled(0.0, matrix.len(), budget_mb, level)?;
         for row in 0..rows {
             for col in 0..cols {
                 factor[col * rows + row] = matrix[row * cols + col];
             }
         }
-        let reflectors = householder_qr(&mut factor, cols, rows)?;
-        let mut transformed = vec![0.0; cols];
+        let reflectors = householder_qr(&mut factor, cols, rows, budget_mb, level)?;
+        let mut transformed = try_reserve_vec_filled(0.0, cols, budget_mb, level)?;
         transformed[..rows].copy_from_slice(rhs);
         for i in 0..rows {
             let diagonal = factor[i * rows + i];
@@ -593,11 +686,11 @@ fn least_squares(matrix: &[f64], rows: usize, cols: usize, rhs: &[f64]) -> Resul
 }
 
 /// Returns reflectors with implicit leading one; R remains in `matrix`.
-fn householder_qr(matrix: &mut [f64], rows: usize, cols: usize) -> Result<Vec<Vec<f64>>> {
-    let mut reflectors = Vec::with_capacity(rows.min(cols));
+fn householder_qr(matrix: &mut [f64], rows: usize, cols: usize, budget_mb: usize, level: Option<usize>) -> Result<Vec<Vec<f64>>> {
+    let mut reflectors = try_reserve_vec_with_capacity(rows.min(cols), budget_mb, level)?;
     for k in 0..rows.min(cols) {
         let length = rows - k;
-        let mut reflector = vec![0.0; length];
+        let mut reflector = try_reserve_vec_filled(0.0, length, budget_mb, level)?;
         for (offset, value) in reflector.iter_mut().enumerate() {
             *value = matrix[(k + offset) * cols + k];
         }
@@ -716,12 +809,12 @@ mod tests {
     #[test]
     fn householder_least_squares_handles_tall_and_wide_systems() {
         let tall = [1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        let x = least_squares(&tall, 3, 2, &[1.0, 2.0, 3.0]).unwrap();
+        let x = least_squares(&tall, 3, 2, &[1.0, 2.0, 3.0], 0, None).unwrap();
         assert!((x[0] - 1.0).abs() < 1e-13);
         assert!((x[1] - 2.0).abs() < 1e-13);
 
         let wide = [1.0, 0.0, 1.0, 0.0, 1.0, 1.0];
-        let x = least_squares(&wide, 2, 3, &[1.0, 2.0]).unwrap();
+        let x = least_squares(&wide, 2, 3, &[1.0, 2.0], 0, None).unwrap();
         let expected = [0.0, 1.0, 1.0];
         for i in 0..3 {
             assert!((x[i] - expected[i]).abs() < 1e-13, "{x:?}");

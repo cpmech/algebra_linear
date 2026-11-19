@@ -221,6 +221,7 @@ otherwise the next person spends a day rediscovering why a file sits below the b
 | `src/sparse/supernodal/lu.rs` | the L/U diagonal-structure guards are drop-invariant checks: a correct supernode partition cannot reach them |
 | `src/sparse/solver.rs`, `src/sparse/csc.rs`, `src/sparse/lu.rs` | accessor bodies that no test calls; they are not refusal arms |
 | `src/sparse/basiclu/{degree_list,eliminate,markowitz,singletons,solve,update}.rs` | `u32::MAX` generation-counter wraparound resets, defensive `NONE` / empty-seed early-return guards, non-finite spike overflow cleanup, and exact-zero row-eta weight guards (`src/sparse/qdldl/` has 100% line coverage) |
+| `src/sparse/amgcl/{matrix,relaxation,coarse,solver/gmres}.rs` | `try_reserve_vec_*` `Err` arms inside `map_chunks` worker closures (reachable only on physical allocator exhaustion after the parent thread's budget check passed), `spai1_with_budget`'s `rows.checked_mul(cols)` guard, and `checked_mul` `usize`-overflow rescues in `DenseLu::new_with_budget` and `Gmres::solve_with_budget` when `budget_mb == 0` (`memory.rs` and `error.rs` are 100% covered) |
 
 So the remainder is rescue and refusal code, by design: a correct routine cannot
 reach the arms whose job is to reject bad input or survive an iteration that gave

@@ -73,7 +73,7 @@ mod symbolic;
 mod accuracy_tests;
 
 pub use lu::SparseScalar;
-pub use solver::LuMethod;
+pub use solver::{EffectiveLuMethod, LuMethod};
 pub use sparse_lu::SparseLu;
 pub use stats::SparseLuStats;
 

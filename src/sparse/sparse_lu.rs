@@ -13,7 +13,7 @@ use web_time::Instant;
 use crate::sparse::SparseError;
 use crate::sparse::csc::{CscPattern, CscView};
 use crate::sparse::lu::SparseScalar;
-use crate::sparse::solver::{LuMethod, LuSolver, LuSymbolic};
+use crate::sparse::solver::{EffectiveLuMethod, LuMethod, LuSolver, LuSymbolic};
 use crate::sparse::stats::{SparseLuStats, flops_estimate};
 
 /// An opaque sparse LU factorization.
@@ -105,6 +105,8 @@ impl<T: SparseScalar> SparseLu<T> {
             nnz_u,
             fill_ratio,
             flops_estimate: flops_estimate(solver.l_col_ptr(), solver.u_col_ptr()),
+            method: self.symbolic.effective_method(),
+            flop_ratio: self.symbolic.flop_ratio(),
             ordering_time: self.symbolic.simplicial().ordering_time(),
             factorization_time,
         };
@@ -125,6 +127,24 @@ impl<T: SparseScalar> SparseLu<T> {
             Some(solver) => solver.solve(b),
             None => Err(SparseError::NotFactorized),
         }
+    }
+
+    /// Returns the factorization method selected during symbolic analysis.
+    ///
+    /// Available immediately after [`Self::analyze`], before [`Self::factorize`]
+    /// has been called.
+    #[inline]
+    pub fn effective_method(&self) -> EffectiveLuMethod {
+        self.symbolic.effective_method()
+    }
+
+    /// Returns the symbolic flop-ratio proxy `Σ col_counts² / nnz(A)`, if computed.
+    ///
+    /// Available immediately after [`Self::analyze`]. Returns `None` when
+    /// symbolic analysis ran with [`LuMethod::Simplicial`].
+    #[inline]
+    pub fn flop_ratio(&self) -> Option<f64> {
+        self.symbolic.flop_ratio()
     }
 
     /// Returns the statistics of the most recent successful factorization.
@@ -336,6 +356,60 @@ mod tests {
         );
     }
 
+    fn build_diagonally_dominant_csc(n: usize, dense: bool) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+        let mut col_ptr = vec![0];
+        let mut row_idx = Vec::new();
+        let mut values = Vec::new();
+        for j in 0..n {
+            if dense {
+                for i in 0..n {
+                    row_idx.push(i);
+                    values.push(if i == j { (n as f64) * 2.0 } else { 1.0 });
+                }
+            } else {
+                for i in j.saturating_sub(1)..=(j + 1).min(n.saturating_sub(1)) {
+                    row_idx.push(i);
+                    values.push(if i == j { 5.0 } else { 1.0 });
+                }
+            }
+            col_ptr.push(row_idx.len());
+        }
+        (col_ptr, row_idx, values)
+    }
+
+    fn verify_method_and_ratio(
+        col_ptr: &[usize],
+        row_idx: &[usize],
+        values: &[f64],
+        method: LuMethod,
+        expected_method: EffectiveLuMethod,
+        check_ratio: impl Fn(Option<f64>),
+    ) {
+        let n = col_ptr.len() - 1;
+        let mut lu = SparseLu::analyze(col_ptr, row_idx, method).unwrap();
+        assert!(lu.stats().is_none());
+        assert_eq!(lu.effective_method(), expected_method);
+        check_ratio(lu.flop_ratio());
+
+        lu.factorize(col_ptr, row_idx, values).unwrap();
+        let stats = lu.stats().expect("stats after factorization");
+        assert_eq!(stats.method, expected_method);
+        assert_eq!(stats.flop_ratio, lu.flop_ratio());
+        check_ratio(stats.flop_ratio);
+
+        let mut x = vec![1.0; n];
+        lu.solve(&mut x).unwrap();
+        let mut ax = vec![0.0; n];
+        for j in 0..n {
+            for k in col_ptr[j]..col_ptr[j + 1] {
+                ax[row_idx[k]] += values[k] * x[j];
+            }
+        }
+        for (i, &val) in ax.iter().enumerate() {
+            assert!((val - 1.0).abs() < 1e-11, "residual mismatch at row {i}: {val}");
+        }
+    }
+
     #[test]
     fn reports_stats_after_each_method() {
         for method in [LuMethod::Simplicial, LuMethod::Supernodal, LuMethod::auto()] {
@@ -355,14 +429,65 @@ mod tests {
             assert!(s.fill_ratio > 1.0);
             assert!((s.fill_ratio - (s.nnz_l + s.nnz_u) as f64 / s.nnz_a as f64).abs() < f64::EPSILON);
             assert!(s.flops_estimate > 0);
+            assert_eq!(s.method, lu.effective_method());
+            assert_eq!(s.flop_ratio, lu.flop_ratio());
             assert!(s.ordering_time.as_nanos() < 1_000_000_000);
             assert!(s.factorization_time.as_nanos() < 1_000_000_000);
         }
     }
 
     #[test]
+    fn reports_effective_method_and_flop_ratio_before_and_after_factorize() {
+        let (tri_cp, tri_ri, tri_vals) = build_diagonally_dominant_csc(9, false);
+        verify_method_and_ratio(
+            &tri_cp,
+            &tri_ri,
+            &tri_vals,
+            LuMethod::Simplicial,
+            EffectiveLuMethod::Simplicial,
+            |ratio| {
+                assert_eq!(ratio, None);
+            },
+        );
+        verify_method_and_ratio(
+            &tri_cp,
+            &tri_ri,
+            &tri_vals,
+            LuMethod::Supernodal,
+            EffectiveLuMethod::Supernodal,
+            |ratio| {
+                let r = ratio.expect("supernodal computes flop ratio");
+                assert!(r > 0.0, "expected positive ratio, got {r}");
+            },
+        );
+        verify_method_and_ratio(&tri_cp, &tri_ri, &tri_vals, LuMethod::auto(), EffectiveLuMethod::Simplicial, |ratio| {
+            let r = ratio.expect("auto computes flop ratio");
+            assert!(r > 0.0 && r <= 40.0, "expected 0 < ratio <= 40, got {r}");
+        });
+
+        let (dense_cp, dense_ri, dense_vals) = build_diagonally_dominant_csc(12, true);
+        verify_method_and_ratio(
+            &dense_cp,
+            &dense_ri,
+            &dense_vals,
+            LuMethod::Auto { flop_ratio_threshold: 1.0 },
+            EffectiveLuMethod::Supernodal,
+            |ratio| {
+                let r = ratio.expect("auto computes flop ratio");
+                assert!(r > 1.0, "expected ratio > 1.0, got {r}");
+            },
+        );
+
+        verify_method_and_ratio(&[0], &[], &[], LuMethod::auto(), EffectiveLuMethod::Simplicial, |ratio| {
+            assert_eq!(ratio, Some(0.0));
+        });
+    }
+
+    #[test]
     fn empty_matrix_has_zero_fill_and_flops() {
         let mut lu = SparseLu::<f64>::analyze(&[0], &[], LuMethod::auto()).unwrap();
+        assert_eq!(lu.effective_method(), EffectiveLuMethod::Simplicial);
+        assert_eq!(lu.flop_ratio(), Some(0.0));
         lu.factorize(&[0], &[], &[]).unwrap();
         let s = lu.stats().unwrap();
         assert_eq!(s.n, 0);
@@ -370,6 +495,8 @@ mod tests {
         assert_eq!(s.fill_ratio, 0.0);
         assert_eq!(s.flops_estimate, 0);
         assert_eq!(s.nnz_factors(), 0);
+        assert_eq!(s.method, EffectiveLuMethod::Simplicial);
+        assert_eq!(s.flop_ratio, Some(0.0));
         let mut b: [f64; 0] = [];
         lu.solve(&mut b).unwrap();
     }

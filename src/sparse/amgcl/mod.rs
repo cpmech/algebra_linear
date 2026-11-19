@@ -46,6 +46,7 @@ mod coarse;
 mod coarsening;
 mod error;
 mod matrix;
+mod memory;
 mod parallel;
 mod preconditioner;
 mod relaxation;
@@ -54,7 +55,7 @@ mod solver;
 mod tests;
 mod vector;
 
-pub use amg::{Amg, AmgParams, LevelInfo, amg_setup};
+pub use amg::{Amg, AmgParams, LevelInfo, amg_setup, amg_setup_owned};
 pub use coarsening::{AggregationParams, Coarsening, CoarseningParams, PlainAggregationParams, SmoothedAggregationParams};
 pub use error::{Error, Result};
 pub use parallel::Parallelism;

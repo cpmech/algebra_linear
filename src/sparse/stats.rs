@@ -2,6 +2,8 @@
 
 use core::time::Duration;
 
+use crate::sparse::solver::EffectiveLuMethod;
+
 /// Structure, cost and timing of a sparse LU factorization.
 ///
 /// The counts describe the factors in their permuted coordinate system. The
@@ -21,6 +23,10 @@ pub struct SparseLuStats {
     pub fill_ratio: f64,
     /// An estimate of the multiply-adds in the factorization.
     pub flops_estimate: usize,
+    /// The factorization method selected by symbolic analysis.
+    pub method: EffectiveLuMethod,
+    /// The symbolic flop-ratio proxy `Σ col_counts² / nnz(A)`, when supernodal symbolic analysis ran.
+    pub flop_ratio: Option<f64>,
     /// The time spent computing the column ordering.
     pub ordering_time: Duration,
     /// The time spent computing the numeric factorization.

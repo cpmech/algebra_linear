@@ -8,6 +8,7 @@ pub use gmres::Gmres;
 
 use crate::sparse::amgcl::amg::Amg;
 use crate::sparse::amgcl::matrix::CsrMatrix;
+use crate::sparse::amgcl::memory::MemoryBudget;
 use crate::sparse::amgcl::parallel::Parallelism;
 use crate::sparse::amgcl::vector::{check_finite_with, norm_with};
 use crate::sparse::amgcl::{Error, Result};
@@ -36,6 +37,8 @@ pub struct SolverParams {
     pub gmres_restart: usize,
     /// Shared-memory execution for matrix and vector kernels.
     pub parallelism: Parallelism,
+    /// Maximum working memory budget in MiB (`0` disables the limit).
+    pub max_memory_mb: usize,
 }
 
 impl Default for SolverParams {
@@ -46,6 +49,7 @@ impl Default for SolverParams {
             absolute_tolerance: 0.0,
             gmres_restart: 30,
             parallelism: Parallelism::default(),
+            max_memory_mb: 0,
         }
     }
 }
@@ -111,14 +115,24 @@ pub(crate) fn report(iterations: usize, residual: f64, norm_rhs: f64, target: f6
 ///
 /// # Errors
 ///
-/// The dimension, parameter and finiteness errors of the selected solver, plus
-/// [`Error::InvalidParameter`] when `params.gmres_restart` is zero and the
-/// method is [`KrylovMethod::Gmres`].
+/// The dimension, parameter, memory-budget, and finiteness errors of the selected
+/// solver, plus [`Error::InvalidParameter`] when `params.gmres_restart` is zero
+/// and the method is [`KrylovMethod::Gmres`].
 pub fn krylov_solve(method: KrylovMethod, amg: &mut Amg, rhs: &[f64], x: &mut [f64], params: SolverParams) -> Result<SolveReport> {
     let matrix = amg.matrix_handle();
+    let effective_mb = effective_budget_mb(amg.max_memory_mb(), params.max_memory_mb);
+    let budget = MemoryBudget::new(effective_mb);
+    budget.record_retained(amg.memory_bytes());
     match method {
-        KrylovMethod::Cg => Cg::new(params).solve(matrix.as_ref(), amg, rhs, x),
-        KrylovMethod::BiCgStab => BiCgStab::new(params).solve(matrix.as_ref(), amg, rhs, x),
-        KrylovMethod::Gmres => Gmres::new(params, params.gmres_restart)?.solve(matrix.as_ref(), amg, rhs, x),
+        KrylovMethod::Cg => Cg::new(params).solve_with_budget(matrix.as_ref(), amg, rhs, x, &budget),
+        KrylovMethod::BiCgStab => BiCgStab::new(params).solve_with_budget(matrix.as_ref(), amg, rhs, x, &budget),
+        KrylovMethod::Gmres => Gmres::new(params, params.gmres_restart)?.solve_with_budget(matrix.as_ref(), amg, rhs, x, &budget),
+    }
+}
+
+fn effective_budget_mb(amg_budget_mb: usize, solver_budget_mb: usize) -> usize {
+    match (amg_budget_mb, solver_budget_mb) {
+        (0, b) | (b, 0) => b,
+        (a, b) => a.min(b),
     }
 }

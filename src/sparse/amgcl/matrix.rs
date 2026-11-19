@@ -1,3 +1,7 @@
+use crate::sparse::amgcl::memory::{
+    MemoryBudget, csr_bytes, out_of_memory, try_clone_slice, try_reserve_vec_filled, try_reserve_vec_with_capacity, try_vec_filled,
+    try_vec_with_capacity, vec_bytes,
+};
 use crate::sparse::amgcl::parallel::{Parallelism, for_each_mut, map_chunks};
 use crate::sparse::amgcl::{Error, Result};
 
@@ -64,6 +68,8 @@ impl CsrMatrix {
 
     /// Builds a canonical CSR matrix from `(row, column, value)` triplets.
     /// Duplicate entries are summed and exact zeros are removed.
+    // Test-only: setup builds canonical CSR matrices directly row-by-row.
+    #[cfg(test)]
     pub fn from_triplets<I>(nrows: usize, ncols: usize, triplets: I) -> Result<Self>
     where
         I: IntoIterator<Item = (usize, usize, f64)>,
@@ -86,34 +92,75 @@ impl CsrMatrix {
         let mut values = Vec::new();
         row_offsets.push(0);
         for row in &mut rows {
-            row.sort_unstable_by_key(|entry| entry.0);
-            let mut i = 0;
-            while i < row.len() {
-                let column = row[i].0;
-                let mut value = 0.0;
-                while i < row.len() && row[i].0 == column {
-                    value += row[i].1;
-                    i += 1;
-                }
-                if value != 0.0 {
-                    col_indices.push(column);
-                    values.push(value);
-                }
-            }
+            push_canonical_row(row, &mut col_indices, &mut values);
+            row_offsets.push(col_indices.len());
+        }
+        Self::from_parts(nrows, ncols, row_offsets, col_indices, values)
+    }
+
+    /// Builds a canonical CSR matrix row-by-row using a single reused scratch buffer.
+    ///
+    /// Callers must pass upper bounds `nnz_cap` and `row_cap` so all allocations are
+    /// checked against `budget` and reserved up front without reallocation.
+    pub(crate) fn from_row_producer_with_budget<F>(
+        nrows: usize,
+        ncols: usize,
+        nnz_cap: usize,
+        row_cap: usize,
+        budget: &MemoryBudget,
+        level: Option<usize>,
+        mut fill_row: F,
+    ) -> Result<Self>
+    where
+        F: FnMut(usize, &mut Vec<(usize, f64)>) -> Result<()>,
+    {
+        budget.check_additional(csr_bytes(nrows, nnz_cap).saturating_add(vec_bytes::<(usize, f64)>(row_cap)), level)?;
+        let mut row_offsets = try_vec_with_capacity::<usize>(nrows + 1, budget, level)?;
+        let mut col_indices = try_vec_with_capacity::<usize>(nnz_cap, budget, level)?;
+        let mut values = try_vec_with_capacity::<f64>(nnz_cap, budget, level)?;
+        let mut row_buf = try_vec_with_capacity::<(usize, f64)>(row_cap, budget, level)?;
+        row_offsets.push(0);
+
+        for row in 0..nrows {
+            row_buf.clear();
+            fill_row(row, &mut row_buf)?;
+            debug_assert!(row_buf.len() <= row_cap);
+            push_canonical_row(&mut row_buf, &mut col_indices, &mut values);
+            debug_assert!(col_indices.len() <= nnz_cap);
             row_offsets.push(col_indices.len());
         }
         Self::from_parts(nrows, ncols, row_offsets, col_indices, values)
     }
 
     /// Returns sorted rows with duplicate columns summed and exact zeros removed.
+    #[cfg(test)]
     pub(crate) fn canonicalized(&self) -> Result<Self> {
-        Self::from_triplets(
-            self.nrows,
-            self.ncols,
-            (0..self.nrows).flat_map(|row| {
-                (self.row_offsets[row]..self.row_offsets[row + 1]).map(move |index| (row, self.col_indices[index], self.values[index]))
-            }),
-        )
+        self.canonicalized_with_budget(&MemoryBudget::new(0), None)
+    }
+
+    /// Returns sorted rows with duplicate columns summed and exact zeros removed.
+    pub(crate) fn canonicalized_with_budget(&self, budget: &MemoryBudget, level: Option<usize>) -> Result<Self> {
+        Self::from_row_producer_with_budget(self.nrows, self.ncols, self.nnz(), self.max_row_nnz(), budget, level, |row, buf| {
+            let entries = self.row(row);
+            for (&column, &value) in entries.columns.iter().zip(entries.values) {
+                buf.push((column, value));
+            }
+            Ok(())
+        })
+    }
+
+    /// Estimated heap footprint in bytes for this CSR matrix.
+    #[inline]
+    pub(crate) fn memory_bytes(&self) -> usize {
+        csr_bytes(self.nrows, self.nnz())
+    }
+
+    /// Maximum stored entry count across all rows.
+    pub(crate) fn max_row_nnz(&self) -> usize {
+        (0..self.nrows)
+            .map(|row| self.row_offsets[row + 1] - self.row_offsets[row])
+            .max()
+            .unwrap_or(0)
     }
 
     /// Number of rows.
@@ -172,11 +219,17 @@ impl CsrMatrix {
     }
 
     /// Returns the diagonal, or an error if the matrix is not square.
+    #[cfg(test)]
     pub fn diagonal(&self) -> Result<Vec<f64>> {
+        self.diagonal_with_budget(&MemoryBudget::new(0), None)
+    }
+
+    /// Returns the diagonal while checking `budget`, or an error if the matrix is not square.
+    pub(crate) fn diagonal_with_budget(&self, budget: &MemoryBudget, level: Option<usize>) -> Result<Vec<f64>> {
         if !self.is_square() {
             return Err(Error::InvalidMatrix("diagonal of a rectangular matrix was requested".into()));
         }
-        let mut diagonal = vec![0.0; self.nrows];
+        let mut diagonal = try_vec_filled(0.0, self.nrows, budget, level)?;
         for (row, diagonal_entry) in diagonal.iter_mut().enumerate() {
             for index in self.row_offsets[row]..self.row_offsets[row + 1] {
                 if self.col_indices[index] == row {
@@ -288,17 +341,27 @@ impl CsrMatrix {
     }
 
     /// Sparse transpose. Duplicate entries in each output row are combined.
+    #[cfg(test)]
     pub fn transpose(&self) -> Self {
-        let mut row_offsets = vec![0; self.ncols + 1];
+        self.transpose_with_budget(&MemoryBudget::new(0), None)
+            .expect("unbounded transpose allocation succeeded")
+    }
+
+    /// Sparse transpose while checking `budget` and using fallible allocations.
+    pub(crate) fn transpose_with_budget(&self, budget: &MemoryBudget, level: Option<usize>) -> Result<Self> {
+        let nnz = self.nnz();
+        let needed = csr_bytes(self.ncols, nnz).saturating_add(vec_bytes::<usize>(self.ncols));
+        budget.check_additional(needed, level)?;
+        let mut row_offsets = try_vec_filled(0, self.ncols + 1, budget, level)?;
         for &column in &self.col_indices {
             row_offsets[column + 1] += 1;
         }
         for row in 0..self.ncols {
             row_offsets[row + 1] += row_offsets[row];
         }
-        let mut next = row_offsets[..self.ncols].to_vec();
-        let mut col_indices = vec![0; self.nnz()];
-        let mut values = vec![0.0; self.nnz()];
+        let mut next = try_clone_slice(&row_offsets[..self.ncols], budget, level)?;
+        let mut col_indices = try_vec_filled(0, nnz, budget, level)?;
+        let mut values = try_vec_filled(0.0, nnz, budget, level)?;
         for row in 0..self.nrows {
             for index in self.row_offsets[row]..self.row_offsets[row + 1] {
                 let output_row = self.col_indices[index];
@@ -308,13 +371,13 @@ impl CsrMatrix {
                 values[target] = self.values[index];
             }
         }
-        Self {
+        Ok(Self {
             nrows: self.ncols,
             ncols: self.nrows,
             row_offsets,
             col_indices,
             values,
-        }
+        })
     }
 
     /// Sparse matrix product `self * rhs` using serial per-row accumulators.
@@ -325,7 +388,13 @@ impl CsrMatrix {
     }
 
     /// Sparse matrix product with independent row blocks and deterministic output.
+    #[cfg(test)]
     pub fn matmul_with(&self, rhs: &Self, params: Parallelism) -> Result<Self> {
+        self.matmul_with_budget(rhs, params, &MemoryBudget::new(0), None)
+    }
+
+    /// Sparse matrix product with independent row blocks, deterministic output, and memory budgeting.
+    pub(crate) fn matmul_with_budget(&self, rhs: &Self, params: Parallelism, budget: &MemoryBudget, level: Option<usize>) -> Result<Self> {
         params.validate()?;
         if self.ncols != rhs.nrows {
             return Err(Error::DimensionMismatch {
@@ -334,11 +403,16 @@ impl CsrMatrix {
                 context: "sparse matrix product",
             });
         }
-        let products = map_chunks(self.nrows, params, |start, end| {
-            let mut rows = Vec::with_capacity(end - start);
-            let mut accumulator = vec![0.0; rhs.ncols];
+        let workers = params.workers(self.nrows);
+        let per_worker_bytes = rhs.ncols.saturating_mul(core::mem::size_of::<f64>() + core::mem::size_of::<usize>());
+        budget.check_additional(workers.saturating_mul(per_worker_bytes), level)?;
+
+        let budget_mb = budget.budget_mb();
+        let raw_chunks = map_chunks(self.nrows, params, |start, end| -> Result<Vec<(Vec<usize>, Vec<f64>)>> {
+            let mut rows = try_reserve_vec_with_capacity(end - start, budget_mb, level)?;
+            let mut accumulator = try_reserve_vec_filled(0.0, rhs.ncols, budget_mb, level)?;
             let mut touched = Vec::new();
-            let mut marker = vec![usize::MAX; rhs.ncols];
+            let mut marker = try_reserve_vec_filled(usize::MAX, rhs.ncols, budget_mb, level)?;
             for row in start..end {
                 touched.clear();
                 for left_index in self.row_offsets[row]..self.row_offsets[row + 1] {
@@ -349,14 +423,19 @@ impl CsrMatrix {
                         if marker[column] != row {
                             marker[column] = row;
                             accumulator[column] = 0.0;
+                            if touched.len() == touched.capacity() {
+                                touched
+                                    .try_reserve(1)
+                                    .map_err(|_| out_of_memory(vec_bytes::<usize>(touched.len().saturating_add(1)), budget_mb, level))?;
+                            }
                             touched.push(column);
                         }
                         accumulator[column] += left_value * rhs.values[right_index];
                     }
                 }
                 touched.sort_unstable();
-                let mut columns = Vec::with_capacity(touched.len());
-                let mut values = Vec::with_capacity(touched.len());
+                let mut columns = try_reserve_vec_with_capacity(touched.len(), budget_mb, level)?;
+                let mut values = try_reserve_vec_with_capacity(touched.len(), budget_mb, level)?;
                 for &column in &touched {
                     let value = accumulator[column];
                     if value != 0.0 {
@@ -366,11 +445,28 @@ impl CsrMatrix {
                 }
                 rows.push((columns, values));
             }
-            rows
+            Ok(rows)
         });
-        let mut row_offsets = Vec::with_capacity(self.nrows + 1);
-        let mut col_indices = Vec::new();
-        let mut values = Vec::new();
+
+        let mut products = try_vec_with_capacity(raw_chunks.len(), budget, level)?;
+        let mut total_nnz = 0_usize;
+        for chunk in raw_chunks {
+            let rows = chunk?;
+            for (columns, _) in &rows {
+                total_nnz = total_nnz.saturating_add(columns.len());
+            }
+            products.push(rows);
+        }
+
+        let transient_bytes = total_nnz
+            .saturating_mul(core::mem::size_of::<usize>() + core::mem::size_of::<f64>())
+            .saturating_add(vec_bytes::<(Vec<usize>, Vec<f64>)>(self.nrows));
+        let output_bytes = csr_bytes(self.nrows, total_nnz);
+        budget.check_additional(transient_bytes.saturating_add(output_bytes), level)?;
+
+        let mut row_offsets = try_vec_with_capacity::<usize>(self.nrows + 1, budget, level)?;
+        let mut col_indices = try_vec_with_capacity::<usize>(total_nnz, budget, level)?;
+        let mut values = try_vec_with_capacity::<f64>(total_nnz, budget, level)?;
         row_offsets.push(0);
         for chunk in products {
             for (columns, chunk_values) in chunk {
@@ -436,6 +532,24 @@ impl CsrMatrix {
             Ok(())
         } else {
             Err(Error::DimensionMismatch { expected, actual, context })
+        }
+    }
+}
+
+/// Sorts one row's `(column, value)` entries, sums duplicates, and emits nonzero values.
+fn push_canonical_row(row: &mut [(usize, f64)], col_indices: &mut Vec<usize>, values: &mut Vec<f64>) {
+    row.sort_unstable_by_key(|entry| entry.0);
+    let mut i = 0;
+    while i < row.len() {
+        let column = row[i].0;
+        let mut value = 0.0;
+        while i < row.len() && row[i].0 == column {
+            value += row[i].1;
+            i += 1;
+        }
+        if value != 0.0 {
+            col_indices.push(column);
+            values.push(value);
         }
     }
 }
