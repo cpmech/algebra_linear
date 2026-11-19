@@ -288,7 +288,7 @@ These are the rules the code depends on. Each one has been violated at least onc
 4. Only after the crate is on crates.io may a dependent crate raise its requirement to the new
    version. Nothing, here or downstream, points at a version that is not published.
 
-## Licence
+## License
 
 `BSD-3-Clause AND Apache-2.0`. The dense kernels derive from LAPACK 3.12.1
 (BSD 3-Clause), `sparse::qdldl` derives from `osqp/qdldl` `v0.1.9` (Apache-2.0),
