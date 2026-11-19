@@ -10,10 +10,18 @@ AMG/Krylov solvers. It must build for any target, including
 library. External libraries appear only in the development-only reference
 harness described below.
 
+The file layout follows one rule: a port of an upstream library is a folder named
+after it (`lapack/`, `sparse/{amgcl,basiclu,faer,qdldl}/`) — or a single file
+when all its kernels share one preamble (`blas.rs`) — and holds the translated
+kernels plus the Rust handles, error and statistics types and the tests that
+expose them; the level roots (`lib.rs`, `sparse/mod.rs`) hold only module
+declarations, re-exports and documentation; the C reference harness
+(`dev_lapack.rs`, `parity.rs`) is feature-gated at the `src/` root.
+
 ## Hard constraints
 
 - **Dense matrices are column-major**, indexing `data[i + j * nrow]`. Sparse
-  formats are solver-specific: `SparseLu`, `sparse::basiclu`, and `sparse::qdldl`
+  formats are solver-specific: `sparse::faer::SparseLu`, `sparse::basiclu`, and `sparse::qdldl`
   (upper triangle) accept CSC, while AMGCL accepts CSR. Do not add implicit
   CSC/CSR conversion; callers provide the required format.
 - **Never use `LAPACKE_*`** — it is the row-major API and silently transposes every
@@ -217,9 +225,9 @@ otherwise the next person spends a day rediscovering why a file sits below the b
 | `src/lapack/auxiliary.rs` | the shared helpers' rescue arms: `dladiv`'s rescale-branch lines are constant-folded out when the fixture's literals reach the inliner (its twelve cases match the reference bit for bit, but the compiler removes the branches it can decide), `lascl_g`'s guards for a zero `cfrom` and for overflow, and the degenerate blocks of `dlae2`/`dlaev2` that the symmetric sweeps never produce |
 | `src/lapack/mod.rs` | the shape guards no test constructs (a zero dimension, a zero right-hand side), and `not_implemented`, which is retained so a reverted routine fails with a message naming the feature instead of a link error — no routine returns it |
 | `src/blas.rs` | one skipped-column arm (`zgemv` with a zero scalar) and the argument lines of two assertion messages |
-| `src/sparse/ordering/colamd.rs` | the garbage-collection and super-column repair arms are reached only by fill patterns larger than the fixtures; `SparseError::IndexOverflow` is unreachable at test sizes |
-| `src/sparse/supernodal/lu.rs` | the L/U diagonal-structure guards are drop-invariant checks: a correct supernode partition cannot reach them |
-| `src/sparse/solver.rs`, `src/sparse/csc.rs`, `src/sparse/lu.rs` | accessor bodies that no test calls; they are not refusal arms |
+| `src/sparse/faer/colamd.rs` | the garbage-collection and super-column repair arms are reached only by fill patterns larger than the fixtures; `Error::IndexOverflow` is unreachable at test sizes |
+| `src/sparse/faer/supernodal_lu.rs` | the L/U diagonal-structure guards are drop-invariant checks: a correct supernode partition cannot reach them |
+| `src/sparse/faer/{solver,csc,lu}.rs` | accessor bodies that no test calls; they are not refusal arms |
 | `src/sparse/basiclu/{degree_list,eliminate,markowitz,singletons,solve,update}.rs` | `u32::MAX` generation-counter wraparound resets, defensive `NONE` / empty-seed early-return guards, non-finite spike overflow cleanup, and exact-zero row-eta weight guards (`src/sparse/qdldl/` has 100% line coverage) |
 | `src/sparse/amgcl/{matrix,relaxation,coarse,solver/gmres}.rs` | `try_reserve_vec_*` `Err` arms inside `map_chunks` worker closures (reachable only on physical allocator exhaustion after the parent thread's budget check passed), `spai1_with_budget`'s `rows.checked_mul(cols)` guard, and `checked_mul` `usize`-overflow rescues in `DenseLu::new_with_budget` and `Gmres::solve_with_budget` when `budget_mb == 0` (`memory.rs` and `error.rs` are 100% covered) |
 
@@ -284,7 +292,7 @@ These are the rules the code depends on. Each one has been violated at least onc
 
 `BSD-3-Clause AND Apache-2.0`. The dense kernels derive from LAPACK 3.12.1
 (BSD 3-Clause), `sparse::qdldl` derives from `osqp/qdldl` `v0.1.9` (Apache-2.0),
-and `SparseLu`, `sparse::amgcl`, and `sparse::basiclu` follow MIT-licensed
+and `sparse::faer`, `sparse::amgcl`, and `sparse::basiclu` follow MIT-licensed
 upstream projects (`faer`, `AMGCL`, and `HiGHS`/`BasicLU`). `LICENSE` reproduces
 every upstream copyright notice and license text verbatim, and they must stay
 verbatim. A kernel taken from another project (OpenBLAS, say) brings its own
