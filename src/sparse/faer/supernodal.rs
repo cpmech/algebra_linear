@@ -3,40 +3,39 @@
 //! The symbolic structure of a supernodal factorization is the column
 //! elimination tree, the column counts of the Cholesky factor of `AᵀA`, and the
 //! partition of the columns into supernodes. This module computes those three
-//! from a CSC pattern and a column permutation; the numeric factorization that
-//! consumes them is not part of this module yet.
+//! from a CSC pattern and a column permutation; `supernodal_lu.rs` consumes them
+//! in the numeric factorization.
 //!
-//! Translated from faer commit `ddbd2ae`: `ghost_column_counts_aat` and
-//! `ghost_least_common_ancestor` from `sparse/linalg/qr.rs`, and the fundamental
-//! supernode partition from `sparse/linalg/cholesky.rs`
-//! (`ghost_factorize_supernodal_symbolic` without the relaxation pass).
+//! Translated from faer commit `ddbd2ae` (MIT; see `LICENSE`):
+//! `ghost_column_counts_aat` and `ghost_least_common_ancestor` from
+//! `sparse/linalg/qr.rs`, and the fundamental supernode partition from
+//! `sparse/linalg/cholesky.rs` (`ghost_factorize_supernodal_symbolic` without
+//! the relaxation pass).
 
-use crate::sparse::csc::CscPattern;
-use crate::sparse::etree;
 #[cfg(test)]
-use crate::sparse::ordering::colamd::{ColamdControl, colamd_order};
-
-pub mod lu;
-
-use crate::sparse::symbolic::fingerprint;
-use crate::sparse::{SparseError, perm};
-pub use lu::SupernodalLu;
+use super::colamd::{ColamdControl, colamd_order};
+use super::csc::CscPattern;
+use super::error::Error;
+use super::etree;
+use super::perm;
+use super::symbolic::fingerprint;
 
 /// The symbolic structure of a supernodal LU factorization.
 ///
-/// The partition is the **fundamental** one: faer's optional relaxation
-/// (amalgamating a child into its parent to trade fill for larger panels) is not
-/// applied yet.
+/// [`Self::analyze_with_permutation`] returns the **fundamental** partition.
+/// [`Self::with_relaxation`] then applies a simplified version of faer's
+/// relaxation, amalgamating a child into its parent to trade fill for larger
+/// panels, and the handle in `solver.rs` calls it after the analysis.
 #[derive(Clone, Debug)]
 pub struct SymbolicSupernodal {
-    n: usize,
+    pub(super) n: usize,
     nnz: usize,
     fingerprint: u64,
     col_counts: Vec<usize>,
     etree: Vec<isize>,
-    col_perm: Vec<usize>,
-    col_perm_inv: Vec<usize>,
-    supernode_ptr: Vec<usize>,
+    pub(super) col_perm: Vec<usize>,
+    pub(super) col_perm_inv: Vec<usize>,
+    pub(super) supernode_ptr: Vec<usize>,
     super_etree: Vec<isize>,
 }
 
@@ -45,12 +44,12 @@ impl SymbolicSupernodal {
     ///
     /// # Errors
     ///
-    /// [`SparseError::BadShape`] if the matrix is not square, plus the ordering
+    /// [`Error::BadShape`] if the matrix is not square, plus the ordering
     /// errors of [`colamd_order`].
     #[cfg(test)]
-    pub fn analyze(pattern: CscPattern<'_>) -> Result<Self, SparseError> {
+    pub fn analyze(pattern: CscPattern<'_>) -> Result<Self, Error> {
         if pattern.nrows() != pattern.ncols() {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         let ordering = colamd_order(pattern, ColamdControl::default())?;
         Self::analyze_with_permutation(pattern, ordering.perm(), ordering.perm_inv())
@@ -63,15 +62,15 @@ impl SymbolicSupernodal {
     ///
     /// # Errors
     ///
-    /// [`SparseError::BadShape`] if the matrix is not square or either argument
+    /// [`Error::BadShape`] if the matrix is not square or either argument
     /// is not a permutation of the columns.
-    pub fn analyze_with_permutation(pattern: CscPattern<'_>, col_perm: &[usize], col_perm_inv: &[usize]) -> Result<Self, SparseError> {
+    pub fn analyze_with_permutation(pattern: CscPattern<'_>, col_perm: &[usize], col_perm_inv: &[usize]) -> Result<Self, Error> {
         if pattern.nrows() != pattern.ncols() {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         let n = pattern.ncols();
         if col_perm.len() != n || col_perm_inv.len() != n || !perm::is_permutation(col_perm) || !perm::is_permutation(col_perm_inv) {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         let (at_col_ptr, at_row_idx) = transpose_pattern(pattern);
         let at = CscPattern::new(n, n, &at_col_ptr, &at_row_idx)?;
@@ -624,8 +623,8 @@ mod tests {
             }
         }
         let pattern = CscPattern::new(n, n, &cp, &ri).unwrap();
-        let view = crate::sparse::csc::CscView::new(n, n, &cp, &ri, &values).unwrap();
-        let simplicial = crate::sparse::symbolic::SymbolicLu::analyze(pattern).unwrap();
+        let view = super::super::csc::CscView::new(n, n, &cp, &ri, &values).unwrap();
+        let simplicial = super::super::symbolic::SymbolicLu::analyze(pattern).unwrap();
         let mut b0 = vec![1.0; n];
         simplicial.factorize(view).unwrap().solve(&mut b0).unwrap();
 
@@ -640,16 +639,16 @@ mod tests {
     #[test]
     fn rejects_bad_shapes_and_permutations() {
         let pattern = CscPattern::new(2, 3, &[0, 0, 0, 0], &[]).unwrap();
-        assert_eq!(SymbolicSupernodal::analyze(pattern).unwrap_err(), SparseError::BadShape);
+        assert_eq!(SymbolicSupernodal::analyze(pattern).unwrap_err(), Error::BadShape);
 
         let pattern = CscPattern::new(2, 2, &[0, 1, 2], &[0, 1]).unwrap();
         assert_eq!(
             SymbolicSupernodal::analyze_with_permutation(pattern, &[0, 0], &[0, 1]).unwrap_err(),
-            SparseError::BadShape
+            Error::BadShape
         );
         assert_eq!(
             SymbolicSupernodal::analyze_with_permutation(pattern, &[0, 1], &[0, 1, 2]).unwrap_err(),
-            SparseError::BadShape
+            Error::BadShape
         );
     }
 }

@@ -12,10 +12,10 @@
 //! output is the same CSC `L`/`U` layout the simplicial path uses, so the two
 //! paths can be compared directly.
 
-use crate::sparse::SparseError;
-use crate::sparse::csc::CscView;
-use crate::sparse::lu::{SparseScalar, unit_lower_solve, upper_solve};
-use crate::sparse::supernodal::SymbolicSupernodal;
+use super::csc::CscView;
+use super::error::Error;
+use super::lu::{SparseScalar, unit_lower_solve, upper_solve};
+use super::supernodal::SymbolicSupernodal;
 
 /// The numeric factors of a supernodal LU.
 ///
@@ -114,11 +114,11 @@ impl<T: SparseScalar> SupernodalLu<T> {
     ///
     /// # Errors
     ///
-    /// [`SparseError::BadShape`] if `b.len()` is not the order of the matrix.
-    pub fn solve(&self, b: &mut [T]) -> Result<(), SparseError> {
+    /// [`Error::BadShape`] if `b.len()` is not the order of the matrix.
+    pub fn solve(&self, b: &mut [T]) -> Result<(), Error> {
         let n = self.n;
         if b.len() != n {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         let mut tmp = vec![T::zero(); n];
         for i in 0..n {
@@ -140,14 +140,14 @@ impl SymbolicSupernodal {
     ///
     /// # Errors
     ///
-    /// [`SparseError::StructureMismatch`] if the structure changed, and
-    /// [`SparseError::Singular`] if a pivot is zero.
-    pub fn factorize<T: SparseScalar>(&self, a: CscView<'_, T>) -> Result<SupernodalLu<T>, SparseError> {
+    /// [`Error::StructureMismatch`] if the structure changed, and
+    /// [`Error::Singular`] if a pivot is zero.
+    pub fn factorize<T: SparseScalar>(&self, a: CscView<'_, T>) -> Result<SupernodalLu<T>, Error> {
         if !self.matches(a.pattern()) {
-            return Err(SparseError::StructureMismatch);
+            return Err(Error::StructureMismatch);
         }
         if a.values().iter().any(|v| !v.is_finite()) {
-            return Err(SparseError::NotFinite);
+            return Err(Error::NotFinite);
         }
         let n = self.n;
         let ns = self.n_supernodes();
@@ -435,13 +435,13 @@ impl SymbolicSupernodal {
             }
             l_cols[j].sort_by_key(|(row, _)| *row);
             if l_cols[j].first().map(|(row, _)| *row) != Some(j) {
-                return Err(SparseError::InvalidStructure);
+                return Err(Error::InvalidStructure);
             }
         }
         for c in 0..n {
             u_cols[c].sort_by_key(|(row, _)| *row);
             if u_cols[c].last().map(|(row, _)| *row) != Some(c) {
-                return Err(SparseError::InvalidStructure);
+                return Err(Error::InvalidStructure);
             }
         }
 
@@ -487,7 +487,7 @@ fn supernode_of(ptr: &[usize], col: usize) -> usize {
 
 /// Partial-pivoting LU of the first `nfactor` columns of an `nrows x ncols`
 /// column-major front, swapping rows across all `ncols` columns.
-fn lu_front<T: SparseScalar>(a: &mut [T], nrows: usize, nfactor: usize, ncols: usize, ipiv: &mut [usize]) -> Result<(), SparseError> {
+fn lu_front<T: SparseScalar>(a: &mut [T], nrows: usize, nfactor: usize, ncols: usize, ipiv: &mut [usize]) -> Result<(), Error> {
     for k in 0..nfactor {
         let mut pivot = k;
         let mut best = a[k + k * nrows].abs();
@@ -499,7 +499,7 @@ fn lu_front<T: SparseScalar>(a: &mut [T], nrows: usize, nfactor: usize, ncols: u
             }
         }
         if best == 0.0 {
-            return Err(SparseError::Singular);
+            return Err(Error::Singular);
         }
         if pivot != k {
             for j in 0..ncols {
@@ -534,9 +534,9 @@ fn lu_front<T: SparseScalar>(a: &mut [T], nrows: usize, nfactor: usize, ncols: u
 
 #[cfg(test)]
 mod tests {
+    use super::super::csc::CscPattern;
+    use super::super::symbolic::SymbolicLu;
     use super::*;
-    use crate::sparse::csc::CscPattern;
-    use crate::sparse::symbolic::SymbolicLu;
 
     fn from_cols(_n: usize, cols: &[&[usize]]) -> (Vec<usize>, Vec<usize>) {
         let mut col_ptr = vec![0];
@@ -810,10 +810,10 @@ mod tests {
         let pattern = CscPattern::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1]).unwrap();
         let symbolic = SymbolicSupernodal::analyze(pattern).unwrap();
         let view = CscView::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1], &[1.0, 2.0, 2.0, 4.0]).unwrap();
-        assert_eq!(symbolic.factorize(view).unwrap_err(), SparseError::Singular);
+        assert_eq!(symbolic.factorize(view).unwrap_err(), Error::Singular);
 
         let other = CscView::new(2, 2, &[0, 2, 3], &[0, 1, 1], &[1.0, 1.0, 1.0]).unwrap();
-        assert_eq!(symbolic.factorize(other).unwrap_err(), SparseError::StructureMismatch);
+        assert_eq!(symbolic.factorize(other).unwrap_err(), Error::StructureMismatch);
 
         let mut b = [1.0, 2.0, 3.0];
         let f = {
@@ -821,7 +821,7 @@ mod tests {
             let view = CscView::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1], &[4.0, 1.0, 1.0, 3.0]).unwrap();
             SymbolicSupernodal::analyze(pattern).unwrap().factorize(view).unwrap()
         };
-        assert_eq!(f.solve(&mut b).unwrap_err(), SparseError::BadShape);
+        assert_eq!(f.solve(&mut b).unwrap_err(), Error::BadShape);
     }
 
     #[test]
@@ -831,7 +831,7 @@ mod tests {
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let values = [4.0, 1.0, bad, 3.0];
             let a = CscView::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1], &values).unwrap();
-            assert_eq!(symbolic.factorize(a).unwrap_err(), SparseError::NotFinite);
+            assert_eq!(symbolic.factorize(a).unwrap_err(), Error::NotFinite);
         }
     }
 

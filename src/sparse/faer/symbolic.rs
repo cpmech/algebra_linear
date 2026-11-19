@@ -2,9 +2,9 @@
 //!
 //! For the simplicial path the symbolic analysis is small: a COLAMD column
 //! ordering plus a fingerprint of the pattern, so a later numeric factorization
-//! can prove it is looking at the same structure. The elimination tree and the
-//! supernodal analysis are only needed by the supernodal path and are not part
-//! of this module yet.
+//! can prove it is looking at the same structure. The elimination tree lives in
+//! `etree.rs` and the supernodal analysis in `supernodal.rs`; both belong to the
+//! supernodal path.
 
 use std::time::Duration;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
@@ -12,9 +12,9 @@ use std::time::Instant;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::Instant;
 
+use super::colamd::{ColamdControl, colamd_order};
 use super::csc::CscPattern;
-use super::ordering::colamd::{ColamdControl, colamd_order};
-use super::{SparseError, perm};
+use super::{error::Error, perm};
 
 /// The result of a symbolic LU analysis.
 ///
@@ -36,11 +36,11 @@ impl SymbolicLu {
     ///
     /// # Errors
     ///
-    /// [`SparseError::BadShape`] if the matrix is not square, and the ordering
+    /// [`Error::BadShape`] if the matrix is not square, and the ordering
     /// errors of [`colamd_order`].
-    pub fn analyze(pattern: CscPattern<'_>) -> Result<Self, SparseError> {
+    pub fn analyze(pattern: CscPattern<'_>) -> Result<Self, Error> {
         if pattern.nrows() != pattern.ncols() {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         let start = Instant::now();
         let ordering = colamd_order(pattern, ColamdControl::default())?;
@@ -100,15 +100,11 @@ impl SymbolicLu {
     ///
     /// # Errors
     ///
-    /// [`SparseError::StructureMismatch`] if `pattern` differs from the one the
+    /// [`Error::StructureMismatch`] if `pattern` differs from the one the
     /// analysis saw. The comparison is a 64-bit fingerprint of the index arrays,
     /// so it is O(`nnz`) and never allocates.
-    pub(crate) fn check_pattern(&self, pattern: CscPattern<'_>) -> Result<(), SparseError> {
-        if self.matches(pattern) {
-            Ok(())
-        } else {
-            Err(SparseError::StructureMismatch)
-        }
+    pub(crate) fn check_pattern(&self, pattern: CscPattern<'_>) -> Result<(), Error> {
+        if self.matches(pattern) { Ok(()) } else { Err(Error::StructureMismatch) }
     }
 }
 
@@ -153,7 +149,7 @@ mod tests {
         // Same shape and nnz, different pattern.
         let other = CscPattern::new(2, 2, &[0, 1, 3], &[0, 0, 1]).unwrap();
         assert!(!symbolic.matches(other));
-        assert_eq!(symbolic.check_pattern(other).unwrap_err(), SparseError::StructureMismatch);
+        assert_eq!(symbolic.check_pattern(other).unwrap_err(), Error::StructureMismatch);
 
         // Different nnz.
         let empty = CscPattern::new(2, 2, &[0, 0, 0], &[]).unwrap();
@@ -163,7 +159,7 @@ mod tests {
     #[test]
     fn rejects_rectangular() {
         let pattern = CscPattern::new(2, 3, &[0, 0, 0, 0], &[]).unwrap();
-        assert_eq!(SymbolicLu::analyze(pattern).unwrap_err(), SparseError::BadShape);
+        assert_eq!(SymbolicLu::analyze(pattern).unwrap_err(), Error::BadShape);
     }
 
     #[test]

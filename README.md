@@ -14,12 +14,12 @@ target, including `wasm32-unknown-unknown`.
 |---|---|
 | `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, `dtrsv` (+transpose), `dtrsm`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `ztrsv` (+transpose), `ztrsm`, `dznrm2` |
 | `lapack` | drivers: `dgesv`, `dgetrf`, `dgetrf_rect` (the `nrows x ncols` panel), `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetrf_rect`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
-| `sparse` | `SparseLu`, an opaque sparse LU over caller-owned CSC arrays, with `LuMethod` choosing the simplicial or supernodal factorization, `EffectiveLuMethod` and `flop_ratio` reporting what `analyze` selected, one analysis reused across value updates, `SparseLuStats` reporting structure, method, proxy, cost and timing, real (`f64`) and complex (`Complex64`) scalars, and the COLAMD ordering |
+| `sparse::faer` | `SparseLu`, an opaque sparse LU over caller-owned CSC arrays, with `LuMethod` choosing the simplicial or supernodal factorization, `EffectiveLuMethod` and `flop_ratio` reporting what `analyze` selected, one analysis reused across value updates, `SparseLuStats` reporting structure, method, proxy, cost and timing, real (`f64`) and complex (`Complex64`) scalars, and the COLAMD ordering |
 | `sparse::qdldl` | `Qdldl`, an unpivoted `L D L^T` solver for symmetric positive-definite and quasi-definite (SQD) upper-triangular CSC matrices with zero-allocation numeric refactorization, inertia reporting, and in-place triangular/full solves |
 | `sparse::basiclu` | `BasicLu`, a general unsymmetric real (`f64`) CSC sparse LU with triangular singleton peeling, Markowitz threshold pivoting, dense and hyper-sparse Gilbert–Peierls FTRAN/BTRAN solves, and Forrest–Tomlin rank-1 basis column updates |
 | `sparse::amgcl` | array-based entry points `amg_setup` / `amg_setup_owned` and `krylov_solve(method, &mut amg, rhs, x, params)` for real `f64` CSR arrays, classical Ruge–Stüben and aggregation-based AMG, Gauss–Seidel, damped Jacobi, ILU(0), Chebyshev, SPAI(0/1), AMG-preconditioned CG, BiCGStab, restarted GMRES, optional MiB memory budgeting (`max_memory_mb` / `Error::OutOfMemory`), and optional native scoped-thread parallelism |
 
-- `sparse` (the sparse LU and its COLAMD ordering) is ported from [faer](https://codeberg.org/sarah-quinones/faer) (MIT License)
+- `sparse::faer` (the sparse LU and its COLAMD ordering) is ported from [faer](https://codeberg.org/sarah-quinones/faer) (MIT License)
 - `sparse::qdldl` is ported from [qdldl](https://github.com/osqp/qdldl) `v0.1.9` (Apache-2.0 License)
 - `sparse::basiclu` is ported from [HiGHS](https://github.com/ERGO-Code/HiGHS) (`highs/ipm/basiclu/`, MIT License)
 - `sparse::amgcl` is ported from [AMGCL](https://github.com/ddemidov/amgcl) (MIT License)
@@ -40,28 +40,28 @@ AMGCL algorithms. Each function names the reference source it follows (for examp
   provide CSR. The crate does not convert between CSC and CSR.
 - **Dense drivers** return `Result<(), LapackError>` rather than LAPACK's `INFO`, with
   `INFO < 0` mapped to `BadShape` and `INFO > 0` to `Singular` or `Convergence`. The sparse
-  routines return `SparseError`; the iterative ones return `amgcl::Error`.
+  routines return `faer::Error`; the iterative ones return `amgcl::Error`.
 - An AVX2+FMA micro-kernel is selected at run time on x86-64; every other target
   (including `wasm32`) takes the portable blocked kernel.
 
-## Sparse LU
+## Sparse LU (`sparse::faer`)
 
 `SparseLu` analyzes a compressed sparse column (CSC) pattern once and factorizes
 new values on it; `LuMethod` chooses `Simplicial`, `Supernodal`, or `Auto { flop_ratio_threshold }`.
-Immediately after `analyze`, `effective_method()` returns the chosen [`EffectiveLuMethod`](src/sparse/solver.rs)
+Immediately after `analyze`, `effective_method()` returns the chosen [`EffectiveLuMethod`](src/sparse/faer/solver.rs)
 and `flop_ratio()` returns `Some(ratio)` when supernodal symbolic analysis ran (or `None` when
 explicit `LuMethod::Simplicial` skipped it). `stats()` exposes `method`, `flop_ratio`, fill,
 flop estimate, and timings after a factorization.
 
-Note on the supernodal path: `SupernodalLu` (`src/sparse/supernodal/lu.rs`) deliberately omits
+Note on the supernodal path: `SupernodalLu` (`src/sparse/faer/supernodal_lu.rs`) deliberately omits
 contribution blocks between supernodes and updates each front by multiplying stored `L` and `U`
 columns directly, which keeps bookkeeping simple at the cost of slower factorizations on large
 fronts compared with upstream faer.
 
 ```rust
-use algebra_linear::sparse::{EffectiveLuMethod, LuMethod, SparseLu};
+use algebra_linear::sparse::faer::{EffectiveLuMethod, LuMethod, SparseLu};
 
-fn main() -> Result<(), algebra_linear::sparse::SparseError> {
+fn main() -> Result<(), algebra_linear::sparse::faer::Error> {
     // A = [4 1; 1 3] in CSC form.
     let col_ptr = [0, 2, 4];
     let row_idx = [0, 1, 0, 1];

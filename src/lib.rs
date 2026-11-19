@@ -1,7 +1,17 @@
 #![warn(missing_docs)]
-//! Pure-Rust BLAS, LAPACK, sparse direct solvers (`SparseLu`, `sparse::qdldl`, `sparse::basiclu`), and AMG/Krylov solvers (`sparse::amgcl`).
+//! Pure-Rust BLAS, LAPACK, sparse direct solvers (`sparse::faer`, `sparse::qdldl`, `sparse::basiclu`), and AMG/Krylov solvers (`sparse::amgcl`).
 //!
-//! # Layout and conventions
+//! # Layout
+//!
+//! An upstream port is a folder named after its upstream (`lapack/`,
+//! `sparse/{amgcl,basiclu,faer,qdldl}/`) or a single file when all kernels share
+//! one preamble (`blas.rs`), and each holds the translated kernels plus the Rust
+//! handles, error and statistics types and the tests that expose them. Level
+//! roots (`lib.rs`, `sparse/mod.rs`) hold module declarations, crate-level
+//! re-exports and level documentation only. The C reference-parity harness
+//! (`dev_lapack.rs`, `parity.rs`) is feature-gated at the `src/` root.
+//!
+//! # Conventions
 //!
 //! * Matrices are column-major, so element `(i, j)` of an `nrow`-row matrix is at
 //!   `data[i + j * nrow]`.
@@ -21,7 +31,7 @@
 //!
 //! The dense routines here are derived from LAPACK and reference BLAS, which
 //! are BSD-3-Clause; `sparse::qdldl` is derived from `osqp/qdldl` `v0.1.9`
-//! (Apache-2.0); `SparseLu`, `sparse::amgcl`, and `sparse::basiclu` follow
+//! (Apache-2.0); `sparse::faer`, `sparse::amgcl`, and `sparse::basiclu` follow
 //! MIT-licensed upstream projects (`faer`, `AMGCL`, and `HiGHS`/`BasicLU`).
 //! The crate is distributed under `BSD-3-Clause AND Apache-2.0`; see
 //! `LICENSE` for all copyright notices and license texts.

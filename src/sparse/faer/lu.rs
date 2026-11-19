@@ -13,10 +13,10 @@
 
 use core::ops::{AddAssign, Mul, SubAssign};
 
+use super::csc::CscView;
+use super::error::Error;
+use super::symbolic::SymbolicLu;
 use crate::Complex64;
-use crate::sparse::SparseError;
-use crate::sparse::csc::CscView;
-use crate::sparse::symbolic::SymbolicLu;
 
 /// The scalar types the sparse LU supports.
 ///
@@ -179,11 +179,11 @@ impl<T: SparseScalar> LuFactors<T> {
     ///
     /// # Errors
     ///
-    /// [`SparseError::BadShape`] if `b.len()` is not the order of the matrix.
-    pub fn solve(&self, b: &mut [T]) -> Result<(), SparseError> {
+    /// [`Error::BadShape`] if `b.len()` is not the order of the matrix.
+    pub fn solve(&self, b: &mut [T]) -> Result<(), Error> {
         let n = self.n;
         if b.len() != n {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         let mut tmp = vec![T::zero(); n];
         for i in 0..n {
@@ -205,12 +205,12 @@ impl SymbolicLu {
     ///
     /// # Errors
     ///
-    /// [`SparseError::StructureMismatch`] if the structure changed, and
-    /// [`SparseError::Singular`] if a column has no nonzero pivot.
-    pub fn factorize<T: SparseScalar>(&self, a: CscView<'_, T>) -> Result<LuFactors<T>, SparseError> {
+    /// [`Error::StructureMismatch`] if the structure changed, and
+    /// [`Error::Singular`] if a column has no nonzero pivot.
+    pub fn factorize<T: SparseScalar>(&self, a: CscView<'_, T>) -> Result<LuFactors<T>, Error> {
         self.check_pattern(a.pattern())?;
         if a.values().iter().any(|v| !v.is_finite()) {
-            return Err(SparseError::NotFinite);
+            return Err(Error::NotFinite);
         }
         let n = self.n();
         let mut l_col_ptr = vec![0usize; n + 1];
@@ -275,7 +275,7 @@ impl SymbolicLu {
             // zero pivot is selected there and produces infinities on solve.
             // A dense LU calls such a matrix singular, so this port does too.
             if pivot_idx == n || pivot_val == 0.0 {
-                return Err(SparseError::Singular);
+                return Err(Error::Singular);
             }
             let x_piv = x[pivot_idx];
             let x_piv_inv = x_piv.recip();
@@ -465,8 +465,8 @@ pub(crate) fn upper_solve<T: SparseScalar>(col_ptr: &[usize], row_idx: &[usize],
 
 #[cfg(test)]
 mod tests {
+    use super::super::csc::CscPattern;
     use super::*;
-    use crate::sparse::csc::CscPattern;
 
     fn analyze(n: usize, col_ptr: &[usize], row_idx: &[usize]) -> SymbolicLu {
         let pattern = CscPattern::new(n, n, col_ptr, row_idx).unwrap();
@@ -634,7 +634,7 @@ mod tests {
         // [1 2; 2 4] is rank one.
         let symbolic = analyze(2, &[0, 2, 4], &[0, 1, 0, 1]);
         let a = CscView::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1], &[1.0, 2.0, 2.0, 4.0]).unwrap();
-        assert_eq!(symbolic.factorize(a).unwrap_err(), SparseError::Singular);
+        assert_eq!(symbolic.factorize(a).unwrap_err(), Error::Singular);
     }
 
     #[test]
@@ -671,7 +671,7 @@ mod tests {
 
         // A different pattern is refused.
         let other = CscView::new(2, 2, &[0, 2, 3], &[0, 1, 1], &[1.0, 1.0, 1.0]).unwrap();
-        assert_eq!(symbolic.factorize(other).unwrap_err(), SparseError::StructureMismatch);
+        assert_eq!(symbolic.factorize(other).unwrap_err(), Error::StructureMismatch);
     }
 
     #[test]
@@ -817,7 +817,7 @@ mod tests {
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let values = [4.0, 1.0, bad, 3.0];
             let a = CscView::new(2, 2, &[0, 2, 4], &[0, 1, 0, 1], &values).unwrap();
-            assert_eq!(symbolic.factorize(a).unwrap_err(), SparseError::NotFinite);
+            assert_eq!(symbolic.factorize(a).unwrap_err(), Error::NotFinite);
         }
     }
 
@@ -825,6 +825,6 @@ mod tests {
     fn rejects_a_wrong_right_hand_side_length() {
         let f = factors(2, &[0, 2, 4], &[0, 1, 0, 1], &[4.0, 1.0, 1.0, 3.0]);
         let mut b = [1.0, 2.0, 3.0];
-        assert_eq!(f.solve(&mut b).unwrap_err(), SparseError::BadShape);
+        assert_eq!(f.solve(&mut b).unwrap_err(), Error::BadShape);
     }
 }

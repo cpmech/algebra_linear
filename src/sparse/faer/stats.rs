@@ -2,7 +2,7 @@
 
 use core::time::Duration;
 
-use crate::sparse::solver::EffectiveLuMethod;
+use super::solver::EffectiveLuMethod;
 
 /// Structure, cost and timing of a sparse LU factorization.
 ///

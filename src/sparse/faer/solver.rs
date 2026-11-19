@@ -24,12 +24,12 @@
 //! entry. On small, sparse patterns the ranking reverses, which is what the
 //! threshold is for.
 
-use crate::sparse::SparseError;
-use crate::sparse::csc::CscPattern;
-use crate::sparse::csc::CscView;
-use crate::sparse::lu::{LuFactors, SparseScalar};
-use crate::sparse::supernodal::{SupernodalLu, SymbolicSupernodal};
-use crate::sparse::symbolic::SymbolicLu;
+use super::csc::{CscPattern, CscView};
+use super::error::Error;
+use super::lu::{LuFactors, SparseScalar};
+use super::supernodal::SymbolicSupernodal;
+use super::supernodal_lu::SupernodalLu;
+use super::symbolic::SymbolicLu;
 
 /// Maximum number of columns a child supernode may have to be merged into its
 /// parent by the relaxation pass.
@@ -115,9 +115,9 @@ impl LuSymbolic {
     ///
     /// # Errors
     ///
-    /// [`SparseError::BadShape`] if the matrix is not square, plus the ordering
+    /// [`Error::BadShape`] if the matrix is not square, plus the ordering
     /// and symbolic errors of the analyses that ran.
-    pub fn analyze(pattern: CscPattern<'_>, method: LuMethod) -> Result<Self, SparseError> {
+    pub fn analyze(pattern: CscPattern<'_>, method: LuMethod) -> Result<Self, Error> {
         let simplicial = SymbolicLu::analyze(pattern)?;
 
         // The supernodal structure is only needed when it may run. Building it
@@ -192,11 +192,11 @@ impl LuSymbolic {
     ///
     /// # Errors
     ///
-    /// [`SparseError::StructureMismatch`] if the pattern changed, and
-    /// [`SparseError::Singular`] if a pivot is zero.
-    pub fn factorize<T: SparseScalar>(&self, a: CscView<'_, T>) -> Result<LuSolver<T>, SparseError> {
+    /// [`Error::StructureMismatch`] if the pattern changed, and
+    /// [`Error::Singular`] if a pivot is zero.
+    pub fn factorize<T: SparseScalar>(&self, a: CscView<'_, T>) -> Result<LuSolver<T>, Error> {
         if self.supernodal {
-            let symbolic = self.supernodal_symbolic.as_ref().ok_or(SparseError::InvalidStructure)?;
+            let symbolic = self.supernodal_symbolic.as_ref().ok_or(Error::InvalidStructure)?;
             Ok(LuSolver {
                 inner: LuSolverInner::Supernodal(symbolic.factorize(a)?),
             })
@@ -272,8 +272,8 @@ impl<T: SparseScalar> LuSolver<T> {
     ///
     /// # Errors
     ///
-    /// [`SparseError::BadShape`] if `b.len()` is not the order of the matrix.
-    pub fn solve(&self, b: &mut [T]) -> Result<(), SparseError> {
+    /// [`Error::BadShape`] if `b.len()` is not the order of the matrix.
+    pub fn solve(&self, b: &mut [T]) -> Result<(), Error> {
         match &self.inner {
             LuSolverInner::Simplicial(f) => f.solve(b),
             LuSolverInner::Supernodal(f) => f.solve(b),
@@ -384,7 +384,7 @@ mod tests {
             let mut values = values(6, &cp, &ri);
             values[0] = f64::NAN;
             let view = CscView::new(6, 6, &cp, &ri, &values).unwrap();
-            assert_eq!(symbolic.factorize(view).unwrap_err(), SparseError::NotFinite);
+            assert_eq!(symbolic.factorize(view).unwrap_err(), Error::NotFinite);
         }
     }
 
@@ -393,7 +393,7 @@ mod tests {
         let (cp, ri) = tridiag(6);
         let symbolic = LuSymbolic::analyze(CscPattern::new(6, 6, &cp, &ri).unwrap(), LuMethod::Simplicial).unwrap();
         let other = CscView::new(6, 6, &[0, 0, 0, 0, 0, 0, 0], &[], &[] as &[f64]).unwrap();
-        assert_eq!(symbolic.factorize(other).unwrap_err(), SparseError::StructureMismatch);
+        assert_eq!(symbolic.factorize(other).unwrap_err(), Error::StructureMismatch);
     }
 
     #[test]

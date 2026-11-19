@@ -1,26 +1,25 @@
 //! Sparse direct and iterative solvers.
 //!
-//! [`SparseLu`] is the general direct solver: it analyzes a compressed sparse
-//! column (CSC) pattern once, then factorizes any values on that pattern. The
-//! COLAMD ordering reduces fill, [`LuMethod`] chooses a simplicial or
-//! supernodal factorization, and [`SparseLuStats`] reports the structure, cost
-//! and timing. The [`qdldl`] submodule provides an unpivoted `L D L^T` solver
-//! for symmetric positive-definite and quasi-definite CSC systems,
-//! [`basiclu`] provides a Markowitz sparse LU factorization with hyper-sparse
-//! solves and Forrest–Tomlin rank-1 updates, and [`amgcl`] provides algebraic
-//! multigrid and preconditioned Krylov solvers for compressed sparse row (CSR)
-//! arrays.
+//! Each solver is a submodule with its own error and result types. [`faer`] is
+//! the general sparse LU direct solver: [`faer::SparseLu`] analyzes a compressed
+//! sparse column (CSC) pattern once and then factorizes any values on that
+//! pattern, the COLAMD ordering reduces fill, [`faer::LuMethod`] chooses a
+//! simplicial or supernodal factorization, and [`faer::SparseLuStats`] reports
+//! the structure, cost and timing. [`qdldl`] provides an unpivoted `L D L^T`
+//! solver for symmetric positive-definite and quasi-definite CSC systems,
+//! [`basiclu`] a Markowitz sparse LU factorization with hyper-sparse solves and
+//! Forrest–Tomlin rank-1 updates, and [`amgcl`] algebraic multigrid and
+//! preconditioned Krylov solvers for compressed sparse row (CSR) arrays.
 //!
 //! # Provenance
 //!
-//! The `SparseLu` algorithms are translated from faer commit `ddbd2ae`
-//! (<https://codeberg.org/sarah-quinones/faer>):
-//!
-//! * `faer/src/sparse/linalg/lu.rs` — the simplicial LU, MIT;
-//! * `faer/src/sparse/linalg/colamd.rs` — the COLAMD ordering, faer's
-//!   transcription of SuiteSparse COLAMD, BSD 3-Clause;
-//! * the column elimination tree and postorder helpers from
-//!   `faer/src/sparse/linalg/qr.rs` and `.../cholesky.rs`.
+//! [`faer`] is translated from faer commit `ddbd2ae`
+//! (<https://codeberg.org/sarah-quinones/faer>): `faer/src/sparse/linalg/lu.rs`
+//! is the simplicial LU (MIT), `faer/src/sparse/linalg/colamd.rs` is the COLAMD
+//! ordering (BSD 3-Clause, faer's transcription of SuiteSparse COLAMD), and the
+//! column elimination tree and postorder helpers come from
+//! `faer/src/sparse/linalg/qr.rs` and `.../cholesky.rs` (MIT). The module's own
+//! documentation carries the file-by-file map and the per-file licenses.
 //!
 //! The [`amgcl`] submodule follows AMGCL revision
 //! `1fbc24e687b404962c31bc4db598f6c73c0f4333` (MIT).
@@ -41,7 +40,7 @@
 //! # Example
 //!
 //! ```
-//! use algebra_linear::sparse::{SparseLu, LuMethod};
+//! use algebra_linear::sparse::faer::{SparseLu, LuMethod};
 //!
 //! let col_ptr = [0, 2, 4];
 //! let row_idx = [0, 1, 0, 1];
@@ -56,94 +55,5 @@
 
 pub mod amgcl;
 pub mod basiclu;
+pub mod faer;
 pub mod qdldl;
-
-mod csc;
-mod etree;
-mod lu;
-mod ordering;
-mod perm;
-mod solver;
-mod sparse_lu;
-mod stats;
-mod supernodal;
-mod symbolic;
-
-#[cfg(test)]
-mod accuracy_tests;
-
-pub use lu::SparseScalar;
-pub use solver::{EffectiveLuMethod, LuMethod};
-pub use sparse_lu::SparseLu;
-pub use stats::SparseLuStats;
-
-/// Errors reported by the sparse routines.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SparseError {
-    /// A shape or length was inconsistent with another.
-    BadShape,
-    /// The CSC arrays are not a valid compressed sparse column structure.
-    InvalidStructure,
-    /// A column's row indices are not strictly increasing.
-    UnsortedRows,
-    /// A column has two entries in the same row.
-    DuplicateEntry,
-    /// The matrix is singular: a column has no nonzero pivot.
-    Singular,
-    /// An index or a workspace size overflowed `usize`.
-    IndexOverflow,
-    /// The pattern differs from the one the symbolic analysis was built for.
-    StructureMismatch,
-    /// An entry of the matrix is NaN or infinite.
-    NotFinite,
-    /// `solve` was called before a successful factorization.
-    NotFactorized,
-}
-
-impl core::fmt::Display for SparseError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let msg = match self {
-            Self::BadShape => "inconsistent shape or length",
-            Self::InvalidStructure => "invalid CSC structure",
-            Self::UnsortedRows => "row indices must be strictly increasing within a column",
-            Self::DuplicateEntry => "duplicate entry in a column",
-            Self::Singular => "the matrix is singular",
-            Self::IndexOverflow => "index or workspace size overflow",
-            Self::StructureMismatch => "the matrix pattern differs from the symbolic analysis",
-            Self::NotFinite => "the matrix has a NaN or infinite entry",
-            Self::NotFactorized => "the matrix has not been factorized",
-        };
-        f.write_str(msg)
-    }
-}
-
-impl std::error::Error for SparseError {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display_messages_are_exact() {
-        let cases = [
-            (SparseError::BadShape, "inconsistent shape or length"),
-            (SparseError::InvalidStructure, "invalid CSC structure"),
-            (SparseError::UnsortedRows, "row indices must be strictly increasing within a column"),
-            (SparseError::DuplicateEntry, "duplicate entry in a column"),
-            (SparseError::Singular, "the matrix is singular"),
-            (SparseError::IndexOverflow, "index or workspace size overflow"),
-            (SparseError::StructureMismatch, "the matrix pattern differs from the symbolic analysis"),
-            (SparseError::NotFinite, "the matrix has a NaN or infinite entry"),
-            (SparseError::NotFactorized, "the matrix has not been factorized"),
-        ];
-        for (error, expected) in cases {
-            assert_eq!(error.to_string(), expected);
-        }
-    }
-
-    #[test]
-    fn usable_through_std_error() {
-        let error: &dyn std::error::Error = &SparseError::BadShape;
-        assert!(!error.to_string().is_empty());
-    }
-}

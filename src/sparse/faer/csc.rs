@@ -5,12 +5,12 @@
 //! so a caller can wrap an existing matrix without a conversion pass.
 //!
 //! Both require the row indices of each column to be **strictly increasing**:
-//! duplicates are reported as [`SparseError::DuplicateEntry`] and out-of-order
-//! rows as [`SparseError::UnsortedRows`]. Requiring order makes the symbolic and
+//! duplicates are reported as [`Error::DuplicateEntry`] and out-of-order
+//! rows as [`Error::UnsortedRows`]. Requiring order makes the symbolic and
 //! numeric passes single-sweep and lets a later adapter from another crate's CSC
 //! type prove its conversion infallible.
 
-use super::SparseError;
+use super::error::Error;
 
 /// A borrowed sparsity pattern in compressed sparse column form.
 ///
@@ -30,40 +30,40 @@ impl<'a> CscPattern<'a> {
     ///
     /// # Errors
     ///
-    /// * [`SparseError::BadShape`] if `col_ptr` does not have `ncols + 1`
+    /// * [`Error::BadShape`] if `col_ptr` does not have `ncols + 1`
     ///   entries, or if its last entry is not `row_idx.len()`;
-    /// * [`SparseError::InvalidStructure`] if `col_ptr` does not start at zero,
+    /// * [`Error::InvalidStructure`] if `col_ptr` does not start at zero,
     ///   is not non-decreasing, or if a row index is not below `nrows`;
-    /// * [`SparseError::DuplicateEntry`] if a column names the same row twice;
-    /// * [`SparseError::UnsortedRows`] if a column's rows are out of order.
-    pub fn new(nrows: usize, ncols: usize, col_ptr: &'a [usize], row_idx: &'a [usize]) -> Result<Self, SparseError> {
+    /// * [`Error::DuplicateEntry`] if a column names the same row twice;
+    /// * [`Error::UnsortedRows`] if a column's rows are out of order.
+    pub fn new(nrows: usize, ncols: usize, col_ptr: &'a [usize], row_idx: &'a [usize]) -> Result<Self, Error> {
         if col_ptr.len() != ncols + 1 {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         if col_ptr[0] != 0 {
-            return Err(SparseError::InvalidStructure);
+            return Err(Error::InvalidStructure);
         }
         if col_ptr[ncols] != row_idx.len() {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         for w in 1..=ncols {
             if col_ptr[w] < col_ptr[w - 1] {
-                return Err(SparseError::InvalidStructure);
+                return Err(Error::InvalidStructure);
             }
         }
         for &r in row_idx {
             if r >= nrows {
-                return Err(SparseError::InvalidStructure);
+                return Err(Error::InvalidStructure);
             }
         }
         for j in 0..ncols {
             let (start, end) = (col_ptr[j], col_ptr[j + 1]);
             for k in start + 1..end {
                 if row_idx[k - 1] == row_idx[k] {
-                    return Err(SparseError::DuplicateEntry);
+                    return Err(Error::DuplicateEntry);
                 }
                 if row_idx[k - 1] > row_idx[k] {
-                    return Err(SparseError::UnsortedRows);
+                    return Err(Error::UnsortedRows);
                 }
             }
         }
@@ -130,12 +130,12 @@ impl<'a, T> CscView<'a, T> {
     /// # Errors
     ///
     /// The pattern errors of [`CscPattern::new`], plus
-    /// [`SparseError::BadShape`] if `values.len()` differs from the pattern's
+    /// [`Error::BadShape`] if `values.len()` differs from the pattern's
     /// number of stored entries.
-    pub fn new(nrows: usize, ncols: usize, col_ptr: &'a [usize], row_idx: &'a [usize], values: &'a [T]) -> Result<Self, SparseError> {
+    pub fn new(nrows: usize, ncols: usize, col_ptr: &'a [usize], row_idx: &'a [usize], values: &'a [T]) -> Result<Self, Error> {
         let pattern = CscPattern::new(nrows, ncols, col_ptr, row_idx)?;
         if values.len() != pattern.nnz() {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         Ok(Self { pattern, values })
     }
@@ -197,40 +197,40 @@ mod tests {
 
     #[test]
     fn pattern_rejects_short_col_ptr() {
-        assert_eq!(CscPattern::new(2, 2, &[0, 1], &[0]).unwrap_err(), SparseError::BadShape);
+        assert_eq!(CscPattern::new(2, 2, &[0, 1], &[0]).unwrap_err(), Error::BadShape);
     }
 
     #[test]
     fn pattern_rejects_len_mismatch() {
-        assert_eq!(CscPattern::new(2, 2, &[0, 1, 2], &[0]).unwrap_err(), SparseError::BadShape);
+        assert_eq!(CscPattern::new(2, 2, &[0, 1, 2], &[0]).unwrap_err(), Error::BadShape);
     }
 
     #[test]
     fn pattern_rejects_nonzero_start() {
-        assert_eq!(CscPattern::new(2, 2, &[1, 1, 2], &[0, 1]).unwrap_err(), SparseError::InvalidStructure);
+        assert_eq!(CscPattern::new(2, 2, &[1, 1, 2], &[0, 1]).unwrap_err(), Error::InvalidStructure);
     }
 
     #[test]
     fn pattern_rejects_decreasing_col_ptr() {
-        assert_eq!(CscPattern::new(2, 2, &[0, 2, 1], &[0]).unwrap_err(), SparseError::InvalidStructure);
+        assert_eq!(CscPattern::new(2, 2, &[0, 2, 1], &[0]).unwrap_err(), Error::InvalidStructure);
     }
 
     #[test]
     fn pattern_rejects_row_out_of_range() {
-        assert_eq!(CscPattern::new(2, 2, &[0, 1, 2], &[0, 2]).unwrap_err(), SparseError::InvalidStructure);
+        assert_eq!(CscPattern::new(2, 2, &[0, 1, 2], &[0, 2]).unwrap_err(), Error::InvalidStructure);
     }
 
     #[test]
     fn pattern_rejects_duplicate_and_unsorted_rows() {
-        assert_eq!(CscPattern::new(3, 3, &[0, 2, 2, 2], &[1, 1]).unwrap_err(), SparseError::DuplicateEntry);
-        assert_eq!(CscPattern::new(3, 3, &[0, 2, 2, 2], &[2, 1]).unwrap_err(), SparseError::UnsortedRows);
+        assert_eq!(CscPattern::new(3, 3, &[0, 2, 2, 2], &[1, 1]).unwrap_err(), Error::DuplicateEntry);
+        assert_eq!(CscPattern::new(3, 3, &[0, 2, 2, 2], &[2, 1]).unwrap_err(), Error::UnsortedRows);
     }
 
     #[test]
     fn view_checks_the_value_length() {
         let col_ptr = [0, 2, 3];
         let row_idx = [0, 1, 1];
-        assert_eq!(CscView::new(2, 2, &col_ptr, &row_idx, &[1.0, 2.0]).unwrap_err(), SparseError::BadShape);
+        assert_eq!(CscView::new(2, 2, &col_ptr, &row_idx, &[1.0, 2.0]).unwrap_err(), Error::BadShape);
         let a = CscView::new(2, 2, &col_ptr, &row_idx, &[4.0, 1.0, 3.0]).unwrap();
         assert_eq!(a.nnz(), 3);
         assert_eq!(a.val_of_col(0), &[4.0, 1.0]);

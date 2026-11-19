@@ -1,10 +1,10 @@
 //! Elimination-tree helpers shared by the orderings and the supernodal analysis.
 //!
-//! Translated from faer commit `ddbd2ae`: `ghost_col_etree` from
-//! `sparse/linalg/qr.rs` and `ghost_postorder` from
+//! Translated from faer commit `ddbd2ae` (MIT; see `LICENSE`): `ghost_col_etree`
+//! from `sparse/linalg/qr.rs` and `ghost_postorder` from
 //! `sparse/linalg/cholesky.rs`.
 
-use crate::sparse::csc::CscPattern;
+use super::csc::CscPattern;
 
 /// `usize` to `isize`, the translation of faer's `I::Signed::truncate`.
 #[inline]

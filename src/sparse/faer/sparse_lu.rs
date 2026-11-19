@@ -10,11 +10,11 @@ use std::time::Instant;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::Instant;
 
-use crate::sparse::SparseError;
-use crate::sparse::csc::{CscPattern, CscView};
-use crate::sparse::lu::SparseScalar;
-use crate::sparse::solver::{EffectiveLuMethod, LuMethod, LuSolver, LuSymbolic};
-use crate::sparse::stats::{SparseLuStats, flops_estimate};
+use super::csc::{CscPattern, CscView};
+use super::error::Error;
+use super::lu::SparseScalar;
+use super::solver::{EffectiveLuMethod, LuMethod, LuSolver, LuSymbolic};
+use super::stats::{SparseLuStats, flops_estimate};
 
 /// An opaque sparse LU factorization.
 ///
@@ -25,7 +25,7 @@ use crate::sparse::stats::{SparseLuStats, flops_estimate};
 /// # Example
 ///
 /// ```
-/// use algebra_linear::sparse::{LuMethod, SparseLu};
+/// use algebra_linear::sparse::faer::{LuMethod, SparseLu};
 ///
 /// // A = [4 1; 1 3] in CSC form.
 /// let col_ptr = [0, 2, 4];
@@ -58,13 +58,13 @@ impl<T: SparseScalar> SparseLu<T> {
     ///
     /// # Errors
     ///
-    /// [`SparseError::BadShape`] if `col_ptr` is empty, the array lengths
+    /// [`Error::BadShape`] if `col_ptr` is empty, the array lengths
     /// disagree, or a row index implies a non-square matrix, plus the
     /// structural errors of the CSC validation.
-    pub fn analyze(col_ptr: &[usize], row_idx: &[usize], method: LuMethod) -> Result<Self, SparseError> {
-        let n = col_ptr.len().checked_sub(1).ok_or(SparseError::BadShape)?;
+    pub fn analyze(col_ptr: &[usize], row_idx: &[usize], method: LuMethod) -> Result<Self, Error> {
+        let n = col_ptr.len().checked_sub(1).ok_or(Error::BadShape)?;
         if row_idx.iter().any(|&row| row >= n) {
-            return Err(SparseError::BadShape);
+            return Err(Error::BadShape);
         }
         let pattern = CscPattern::new(n, n, col_ptr, row_idx)?;
         let symbolic = LuSymbolic::analyze(pattern, method)?;
@@ -84,11 +84,11 @@ impl<T: SparseScalar> SparseLu<T> {
     ///
     /// # Errors
     ///
-    /// [`SparseError::StructureMismatch`] if the pattern differs,
-    /// [`SparseError::NotFinite`] if a value is NaN or infinite,
-    /// [`SparseError::Singular`] if a pivot is zero, and the shape errors of
+    /// [`Error::StructureMismatch`] if the pattern differs,
+    /// [`Error::NotFinite`] if a value is NaN or infinite,
+    /// [`Error::Singular`] if a pivot is zero, and the shape errors of
     /// the CSC view.
-    pub fn factorize(&mut self, col_ptr: &[usize], row_idx: &[usize], values: &[T]) -> Result<(), SparseError> {
+    pub fn factorize(&mut self, col_ptr: &[usize], row_idx: &[usize], values: &[T]) -> Result<(), Error> {
         let a = CscView::new(self.n, self.n, col_ptr, row_idx, values)?;
         let start = Instant::now();
         let solver = self.symbolic.factorize(a)?;
@@ -120,12 +120,12 @@ impl<T: SparseScalar> SparseLu<T> {
     ///
     /// # Errors
     ///
-    /// [`SparseError::NotFactorized`] if no factorization has succeeded, and
-    /// [`SparseError::BadShape`] if `b.len()` is not the order of the matrix.
-    pub fn solve(&self, b: &mut [T]) -> Result<(), SparseError> {
+    /// [`Error::NotFactorized`] if no factorization has succeeded, and
+    /// [`Error::BadShape`] if `b.len()` is not the order of the matrix.
+    pub fn solve(&self, b: &mut [T]) -> Result<(), Error> {
         match &self.solver {
             Some(solver) => solver.solve(b),
-            None => Err(SparseError::NotFactorized),
+            None => Err(Error::NotFactorized),
         }
     }
 
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bench_sparse_lu() {
-        use crate::sparse::{LuMethod, SparseLu};
+        use crate::sparse::faer::{LuMethod, SparseLu};
         use std::time::Instant;
         let m = 4_usize; // nodes per side
         let n = m * m * m * 3;
@@ -317,7 +317,7 @@ mod tests {
         let other_values = [1.0, 1.0, 1.0];
         assert_eq!(
             lu.factorize(&other_col_ptr, &other_row_idx, &other_values).unwrap_err(),
-            SparseError::StructureMismatch
+            Error::StructureMismatch
         );
     }
 
@@ -325,11 +325,11 @@ mod tests {
     fn solve_requires_a_factorization_and_the_right_length() {
         let mut lu = SparseLu::analyze(&COL_PTR, &ROW_IDX, LuMethod::auto()).unwrap();
         let mut b = [1.0, 2.0];
-        assert_eq!(lu.solve(&mut b).unwrap_err(), SparseError::NotFactorized);
+        assert_eq!(lu.solve(&mut b).unwrap_err(), Error::NotFactorized);
 
         lu.factorize(&COL_PTR, &ROW_IDX, &VALUES).unwrap();
         let mut bad = [1.0, 2.0, 3.0];
-        assert_eq!(lu.solve(&mut bad).unwrap_err(), SparseError::BadShape);
+        assert_eq!(lu.solve(&mut bad).unwrap_err(), Error::BadShape);
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
         let mut lu = SparseLu::analyze(&COL_PTR, &ROW_IDX, LuMethod::auto()).unwrap();
         for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let values = [4.0, 1.0, bad, 3.0];
-            assert_eq!(lu.factorize(&COL_PTR, &ROW_IDX, &values).unwrap_err(), SparseError::NotFinite);
+            assert_eq!(lu.factorize(&COL_PTR, &ROW_IDX, &values).unwrap_err(), Error::NotFinite);
         }
     }
 
@@ -347,12 +347,12 @@ mod tests {
         // an n x n matrix with n = col_ptr.len() - 1.
         assert_eq!(
             SparseLu::<f64>::analyze(&[0, 2, 3], &[0, 1, 2], LuMethod::auto()).unwrap_err(),
-            SparseError::BadShape
+            Error::BadShape
         );
-        assert_eq!(SparseLu::<f64>::analyze(&[], &[], LuMethod::auto()).unwrap_err(), SparseError::BadShape);
+        assert_eq!(SparseLu::<f64>::analyze(&[], &[], LuMethod::auto()).unwrap_err(), Error::BadShape);
         assert_eq!(
             SparseLu::<f64>::analyze(&[0, 2, 2], &[1, 0], LuMethod::auto()).unwrap_err(),
-            SparseError::UnsortedRows
+            Error::UnsortedRows
         );
     }
 

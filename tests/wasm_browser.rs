@@ -7,8 +7,8 @@
 
 use algebra_linear::sparse::amgcl::{AmgParams, KrylovMethod, Parallelism, SolverParams, amg_setup, amg_setup_owned, krylov_solve};
 use algebra_linear::sparse::basiclu::{BasicLu, BasicLuParams};
+use algebra_linear::sparse::faer::{EffectiveLuMethod, LuMethod, SparseLu};
 use algebra_linear::sparse::qdldl::Qdldl;
-use algebra_linear::sparse::{EffectiveLuMethod, LuMethod, SparseLu};
 use wasm_bindgen_test::*;
 
 /// Five-point Laplacian on an `nx` by `ny` grid as raw CSR arrays.

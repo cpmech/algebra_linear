@@ -1,11 +1,11 @@
 //! Permutation helpers.
 //!
 //! A permutation is a `[usize]` in which every index appears exactly once. The
-//! routines here allocate their results and return [`SparseError`] rather than
+//! routines here allocate their results and return [`Error`] rather than
 //! panicking on malformed input.
 
 #[cfg(test)]
-use super::SparseError;
+use super::error::Error;
 
 /// Returns `true` if every index in `0..perm.len()` appears exactly once.
 ///
@@ -29,11 +29,11 @@ pub fn is_permutation(perm: &[usize]) -> bool {
 ///
 /// # Errors
 ///
-/// [`SparseError::BadShape`] if `perm` is not a permutation.
+/// [`Error::BadShape`] if `perm` is not a permutation.
 #[cfg(test)]
-pub fn invert(perm: &[usize]) -> Result<Vec<usize>, SparseError> {
+pub fn invert(perm: &[usize]) -> Result<Vec<usize>, Error> {
     if !is_permutation(perm) {
-        return Err(SparseError::BadShape);
+        return Err(Error::BadShape);
     }
     let mut inverse = vec![0; perm.len()];
     for (new, &old) in perm.iter().enumerate() {
@@ -62,6 +62,6 @@ mod tests {
         let inv = invert(&p).unwrap();
         assert_eq!(inv, [1, 2, 0]);
         assert_eq!(invert(&[]).unwrap(), Vec::<usize>::new());
-        assert_eq!(invert(&[0, 1, 1]).unwrap_err(), SparseError::BadShape);
+        assert_eq!(invert(&[0, 1, 1]).unwrap_err(), Error::BadShape);
     }
 }

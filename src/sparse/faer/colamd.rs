@@ -13,7 +13,7 @@
 //! | `I: Index`, `I::Signed` | `usize`, `isize` |
 //! | `SymbolicSparseColMatRef` | [`CscPattern`] |
 //! | `MemStack`/`StackReq` | `Vec` allocated here |
-//! | `FaerError` | [`SparseError`] |
+//! | `FaerError` | [`Error`] |
 //!
 //! The returned permutation is **postordered** through the column elimination
 //! tree, exactly as faer's `colamd::order` does; that postorder is what the
@@ -24,9 +24,9 @@
 //! faer path itself indexes out of bounds on such input. The inputs this port
 //! accepts are exactly the ones that path would have repaired.
 
-use crate::sparse::SparseError;
-use crate::sparse::csc::CscPattern;
-use crate::sparse::etree::{col_etree, postorder};
+use super::csc::CscPattern;
+use super::error::Error;
+use super::etree::{col_etree, postorder};
 
 /// The sentinel faer uses for "no such index".
 ///
@@ -182,16 +182,16 @@ fn clear_mark(tag_mark: usize, max_mark: usize, row: &mut [ColamdRow]) -> usize 
 ///
 /// # Errors
 ///
-/// * [`SparseError::BadShape`] if the matrix is not square;
-/// * [`SparseError::IndexOverflow`] if the work array size overflows `usize`.
+/// * [`Error::BadShape`] if the matrix is not square;
+/// * [`Error::IndexOverflow`] if the work array size overflows `usize`.
 ///
 /// The pattern itself is validated by [`CscPattern::new`], so malformed CSC
 /// arrays are rejected before this routine runs.
-pub fn colamd_order(pattern: CscPattern<'_>, control: ColamdControl) -> Result<ColamdOrdering, SparseError> {
+pub fn colamd_order(pattern: CscPattern<'_>, control: ColamdControl) -> Result<ColamdOrdering, Error> {
     let m = pattern.nrows();
     let n = pattern.ncols();
     if m != n {
-        return Err(SparseError::BadShape);
+        return Err(Error::BadShape);
     }
     if n == 0 {
         return Ok(ColamdOrdering {
@@ -228,7 +228,7 @@ pub fn colamd_order(pattern: CscPattern<'_>, control: ColamdControl) -> Result<C
         .checked_mul(nnz)
         .and_then(|x| x.checked_add(nnz / 5))
         .and_then(|x| x.checked_add(n))
-        .ok_or(SparseError::IndexOverflow)?;
+        .ok_or(Error::IndexOverflow)?;
     let mut a = vec![0usize; size];
 
     p[0] = 0;
@@ -789,8 +789,8 @@ fn garbage_collection(row: &mut [ColamdRow], col: &mut [ColamdCol], a: &mut [usi
 
 #[cfg(test)]
 mod tests {
+    use super::super::perm::is_permutation;
     use super::*;
-    use crate::sparse::perm::is_permutation;
 
     fn from_cols(n: usize, cols: &[&[usize]]) -> (Vec<usize>, Vec<usize>) {
         let mut col_ptr = Vec::with_capacity(n + 1);
@@ -975,6 +975,6 @@ mod tests {
     #[test]
     fn rejects_rectangular() {
         let pattern = CscPattern::new(3, 4, &[0, 0, 0, 0, 0], &[]).unwrap();
-        assert_eq!(colamd_order(pattern, ColamdControl::default()).unwrap_err(), SparseError::BadShape);
+        assert_eq!(colamd_order(pattern, ColamdControl::default()).unwrap_err(), Error::BadShape);
     }
 }

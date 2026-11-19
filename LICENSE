@@ -5,13 +5,14 @@ Copyright (c) 2026 Dorival Pedroso (the Rust transcription)
 This crate is distributed under BSD-3-Clause AND Apache-2.0 (see the component
 notices below). Its dense kernels are a transcription of LAPACK 3.12.1 and its
 reference BLAS (BSD-3-Clause), whose copyright notice and license conditions are
-reproduced verbatim below. The sparse LU and its COLAMD ordering are a
-translation of faer (MIT), whose notice — together with the SuiteSparse COLAMD
-(BSD 3-Clause) notice — follows the LAPACK one. The AMGCL module follows the
-MIT-licensed AMGCL project; the `sparse::basiclu` module follows MIT-licensed
-BasicLU (`ERGO-Code/HiGHS`); and the `sparse::qdldl` module is a port of
-Apache-2.0-licensed `osqp/qdldl` (`v0.1.9`), which requires distributing the
-Apache-2.0 license text below. Every derived notice is reproduced verbatim.
+reproduced verbatim below. The `sparse::faer` module — the sparse LU and its
+COLAMD ordering — is a translation of faer (MIT), whose notice, together with
+the SuiteSparse COLAMD (BSD 3-Clause) notice, follows the LAPACK one. The
+`sparse::amgcl` module follows the MIT-licensed AMGCL project; the
+`sparse::basiclu` module follows MIT-licensed BasicLU (`ERGO-Code/HiGHS`); and
+the `sparse::qdldl` module is a port of Apache-2.0-licensed `osqp/qdldl`
+(`v0.1.9`), which requires distributing the Apache-2.0 license text below.
+Every derived notice is reproduced verbatim.
 
 LAPACK: https://www.netlib.org/lapack/ — version 3.12.1.
 
@@ -72,10 +73,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 faer — sparse LU and COLAMD (MIT)
 ================================================================================
 
-The sparse LU in `src/sparse/` is a translation of faer's sparse LU and of
+The sparse LU in `src/sparse/faer/` is a translation of faer's sparse LU and of
 faer's COLAMD ordering, taken from faer commit ddbd2ae
 (https://codeberg.org/sarah-quinones/faer). faer's sparse LU is distributed under
-the MIT licence:
+the MIT license:
 
 MIT License
 
@@ -100,10 +101,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-SuiteSparse COLAMD — copyright notice and licence (BSD 3-Clause)
+SuiteSparse COLAMD — copyright notice and license (BSD 3-Clause)
 ================================================================================
 
-The COLAMD ordering in `src/sparse/ordering/colamd.rs` follows faer's
+The COLAMD ordering in `src/sparse/faer/colamd.rs` follows faer's
 transcription of SuiteSparse COLAMD.
 
 COLAMD, Copyright 1998-2022, Timothy A. Davis.  http://www.suitesparse.com
