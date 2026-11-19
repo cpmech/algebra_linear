@@ -44,9 +44,16 @@ jobs:
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@v2
       - name: Install wasmtime
+        # Pinned and fetched from the release asset, not wasmtime.dev/install.sh: that script
+        # briefly served a template with unsubstituted `{` placeholders, exited 0, and left the
+        # WASI tests without a runner ("could not execute process `wasmtime`"). The version
+        # assertion makes a silent no-install fail here instead of two steps later.
         run: |
-          curl -sSf https://wasmtime.dev/install.sh | bash
-          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          WASMTIME_VERSION=v50.0.2
+          curl -sSfL "https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz" -o wasmtime.tar.xz
+          tar xf wasmtime.tar.xz
+          echo "$PWD/wasmtime-${WASMTIME_VERSION}-x86_64-linux" >> "$GITHUB_PATH"
+          "./wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" --version
       - name: Build for wasm32-unknown-unknown
         run: cargo build --lib --target wasm32-unknown-unknown
       - name: Run the tests on WASI (generic kernel, no SIMD requirement)
