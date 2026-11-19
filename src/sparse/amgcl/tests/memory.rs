@@ -1,3 +1,4 @@
+use crate::sparse::amgcl::coarse::DenseLu;
 use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::memory::{BYTES_PER_MIB, MemoryBudget, bytes_to_mib_ceil};
 use crate::sparse::amgcl::{
@@ -339,6 +340,32 @@ fn setup_enforces_budget_across_coarsening_strategies_and_direct_coarse() {
     )
     .unwrap();
     assert!(ok.levels().next().unwrap().direct_solver);
+}
+
+#[test]
+fn dense_lu_budget_covers_the_pivot_vector() {
+    let n = 362;
+    let a = CsrMatrix::from_triplets(n, n, (0..n).map(|i| (i, i, 2.0))).unwrap();
+
+    let err = DenseLu::new_with_budget(&a, &MemoryBudget::new(1), Some(0)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::OutOfMemory {
+                budget_mb: 1,
+                level: Some(0),
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+
+    let dense_lu = DenseLu::new_with_budget(&a, &MemoryBudget::new(2), Some(0)).unwrap();
+    assert!(dense_lu.memory_bytes() <= 2 * BYTES_PER_MIB);
+
+    let mut x = vec![0.0; n];
+    dense_lu.solve(&vec![1.0; n], &mut x);
+    assert!(x.iter().all(|&value| (value - 0.5).abs() <= 1e-15), "{x:?}");
 }
 
 #[test]

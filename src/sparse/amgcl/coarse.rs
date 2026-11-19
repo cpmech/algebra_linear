@@ -1,4 +1,4 @@
-use crate::lapack::{LapackError, dgetrf, dgetrs};
+use crate::lapack::{LapackError, dgetrf_with_pivots, dgetrs};
 use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::memory::{MemoryBudget, try_vec_filled, vec_bytes};
 use crate::sparse::amgcl::{Error, Result};
@@ -32,11 +32,12 @@ impl DenseLu {
         let exact_dense_len = n.checked_mul(n).ok_or_else(|| budget.alloc_error(usize::MAX, level))?;
 
         let mut lu = try_vec_filled(0.0, exact_dense_len, budget, level)?;
+        let mut pivots = try_vec_filled(0usize, n, budget, level)?;
         fill_dense_from_csr(matrix, n, &mut lu);
 
         // First attempt: the operator as the Galerkin product produced it.
-        match dgetrf(&mut lu, n) {
-            Ok((pivots, _determinant)) => return Ok(Self { lu, pivots }),
+        match dgetrf_with_pivots(&mut lu, n, &mut pivots) {
+            Ok(_determinant) => return Ok(Self { lu, pivots }),
             Err(LapackError::Singular) => {}
             Err(error) => return Err(map_lapack_error(error)),
         }
@@ -51,8 +52,8 @@ impl DenseLu {
         for factor in SHIFT_FACTORS {
             fill_dense_from_csr(matrix, n, &mut lu);
             apply_shift(&mut lu, n, factor * scale);
-            match dgetrf(&mut lu, n) {
-                Ok((pivots, _determinant)) => return Ok(Self { lu, pivots }),
+            match dgetrf_with_pivots(&mut lu, n, &mut pivots) {
+                Ok(_determinant) => return Ok(Self { lu, pivots }),
                 Err(LapackError::Singular) => continue,
                 Err(error) => return Err(map_lapack_error(error)),
             }

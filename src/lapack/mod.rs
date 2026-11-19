@@ -97,27 +97,26 @@ pub enum LapackError {
 
 /// `dgetrf`: LU factorization with partial pivoting, in place.
 ///
-/// Overwrites `a` with the packed `L` (unit diagonal, multipliers below it) and
-/// `U`. Returns the pivot indices (0-based, unlike LAPACK's 1-based) and the
-/// determinant.
+/// Follows LAPACK 3.12.1 `dgetrf`.
 ///
-/// The determinant comes out of the factorization for free as the product of `U`'s
-/// diagonal with a sign flip per row interchange, which is why it is returned here
-/// rather than computed separately.
+/// Overwrites `a` with the packed `L` (unit diagonal, multipliers below it) and
+/// `U`, writes the 0-based pivot indices into `ipiv` (unlike LAPACK's 1-based),
+/// and returns the determinant. The pivot buffer is caller-provided so a
+/// budget-controlled caller can allocate it fallibly before this routine runs;
+/// [`dgetrf`] allocates one for callers that do not need to.
 ///
 /// # Errors
 ///
 /// [`LapackError::Singular`] if a pivot is zero to working precision, and
-/// [`LapackError::BadShape`] if `a.len() != n * n`.
-pub fn dgetrf(a: &mut [f64], n: usize) -> Result<(Vec<usize>, f64), LapackError> {
-    if a.len() != n * n {
+/// [`LapackError::BadShape`] if `a.len() != n * n` or `ipiv.len() != n`.
+pub(crate) fn dgetrf_with_pivots(a: &mut [f64], n: usize, ipiv: &mut [usize]) -> Result<f64, LapackError> {
+    if a.len() != n * n || ipiv.len() != n {
         return Err(LapackError::BadShape);
     }
     if n == 0 {
-        return Ok((Vec::new(), 1.0));
+        return Ok(1.0);
     }
 
-    let mut ipiv = vec![0usize; n];
     let mut det = 1.0;
 
     for k in 0..n {
@@ -160,6 +159,28 @@ pub fn dgetrf(a: &mut [f64], n: usize) -> Result<(Vec<usize>, f64), LapackError>
         }
     }
 
+    Ok(det)
+}
+
+/// `dgetrf`: LU factorization with partial pivoting, in place.
+///
+/// Follows LAPACK 3.12.1 `dgetrf`.
+///
+/// Overwrites `a` with the packed `L` (unit diagonal, multipliers below it) and
+/// `U`. Returns the pivot indices (0-based, unlike LAPACK's 1-based) and the
+/// determinant.
+///
+/// The determinant comes out of the factorization for free as the product of `U`'s
+/// diagonal with a sign flip per row interchange, which is why it is returned here
+/// rather than computed separately.
+///
+/// # Errors
+///
+/// [`LapackError::Singular`] if a pivot is zero to working precision, and
+/// [`LapackError::BadShape`] if `a.len() != n * n`.
+pub fn dgetrf(a: &mut [f64], n: usize) -> Result<(Vec<usize>, f64), LapackError> {
+    let mut ipiv = vec![0usize; n];
+    let det = dgetrf_with_pivots(a, n, &mut ipiv)?;
     Ok((ipiv, det))
 }
 
