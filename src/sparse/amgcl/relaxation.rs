@@ -2,7 +2,7 @@
 
 use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::memory::{
-    MemoryBudget, csr_bytes, out_of_memory, try_clone_slice, try_reserve_vec_filled, try_reserve_vec_with_capacity, try_vec_filled,
+    BudgetGuard, MemoryBudget, csr_bytes, out_of_memory, try_clone_slice, try_reserve_vec_filled, try_reserve_vec_with_capacity, try_vec_filled,
     try_vec_with_capacity, vec_bytes,
 };
 use crate::sparse::amgcl::parallel::{Parallelism, for_each_mut, map_chunks};
@@ -554,10 +554,13 @@ fn spai1_with_budget(a: &CsrMatrix, parallel: Parallelism, budget: &MemoryBudget
     budget.check_additional(marker_bytes.saturating_add(csr_bytes(n, a.nnz())), level)?;
 
     let budget_mb = budget.budget_mb();
-    let raw_chunks = map_chunks(n, parallel, |start, end| -> Result<Vec<f64>> {
+    let raw_chunks = map_chunks(n, parallel, |start, end| -> Result<(Vec<f64>, BudgetGuard<'_>)> {
+        let chunk_guard = budget.try_guard(vec_bytes::<f64>(a.row_offsets()[end] - a.row_offsets()[start]), level)?;
+        let _marker_guard = budget.try_guard(vec_bytes::<usize>(n), level)?;
+        let _neighborhood_guard = budget.try_guard(vec_bytes::<usize>(n), level)?;
         let mut inverse_values = try_reserve_vec_with_capacity(a.row_offsets()[end] - a.row_offsets()[start], budget_mb, level)?;
         let mut marker = try_reserve_vec_filled(usize::MAX, n, budget_mb, level)?;
-        let mut neighborhood = Vec::new();
+        let mut neighborhood = try_reserve_vec_with_capacity::<usize>(n, budget_mb, level)?;
 
         for i in start..end {
             let row_start = a.row_offsets()[i];
@@ -572,11 +575,6 @@ fn spai1_with_budget(a: &CsrMatrix, parallel: Parallelism, budget: &MemoryBudget
                     let reachable = a.col_indices()[index];
                     if marker[reachable] == usize::MAX {
                         marker[reachable] = 0;
-                        if neighborhood.len() == neighborhood.capacity() {
-                            neighborhood
-                                .try_reserve(1)
-                                .map_err(|_| out_of_memory(vec_bytes::<usize>(neighborhood.len().saturating_add(1)), budget_mb, level))?;
-                        }
                         neighborhood.push(reachable);
                     }
                 }
@@ -588,6 +586,12 @@ fn spai1_with_budget(a: &CsrMatrix, parallel: Parallelism, budget: &MemoryBudget
                 marker[original] = row;
             }
             let local_len = rows.checked_mul(cols).ok_or_else(|| out_of_memory(usize::MAX, budget_mb, level))?;
+            let _row_guard = budget.try_guard(
+                vec_bytes::<f64>(local_len)
+                    .saturating_add(vec_bytes::<f64>(rows))
+                    .saturating_add(least_squares_workspace_bytes(rows, cols)),
+                level,
+            )?;
             let mut local = try_reserve_vec_filled(0.0, local_len, budget_mb, level)?;
             let mut rhs = try_reserve_vec_filled(0.0, rows, budget_mb, level)?;
             for (row, &original) in neighborhood.iter().enumerate() {
@@ -611,25 +615,41 @@ fn spai1_with_budget(a: &CsrMatrix, parallel: Parallelism, budget: &MemoryBudget
                 marker[original] = usize::MAX;
             }
         }
-        Ok(inverse_values)
+        Ok((inverse_values, chunk_guard))
     });
     let mut chunks = try_vec_with_capacity(raw_chunks.len(), budget, level)?;
+    let mut guards: Vec<BudgetGuard<'_>> = try_vec_with_capacity(raw_chunks.len(), budget, level)?;
     for chunk in raw_chunks {
-        chunks.push(chunk?);
+        let (values, guard) = chunk?;
+        chunks.push(values);
+        guards.push(guard);
     }
-    let _chunks_guard = budget.guard(vec_bytes::<f64>(a.nnz()));
     budget.check_additional(csr_bytes(n, a.nnz()), level)?;
     let mut inverse_values = try_vec_with_capacity::<f64>(a.nnz(), budget, level)?;
     for chunk in chunks {
         inverse_values.extend(chunk);
     }
-    drop(_chunks_guard);
+    drop(guards);
     let _vals_guard = budget.guard(vec_bytes::<f64>(inverse_values.len()));
     let row_offsets = try_clone_slice(a.row_offsets(), budget, level)?;
     let _rows_guard = budget.guard(vec_bytes::<usize>(row_offsets.len()));
     let col_indices = try_clone_slice(a.col_indices(), budget, level)?;
 
     CsrMatrix::from_parts(n, n, row_offsets, col_indices, inverse_values)
+}
+
+/// Upper bound on the buffers `least_squares` allocates for a `rows` by `cols` system.
+fn least_squares_workspace_bytes(rows: usize, cols: usize) -> usize {
+    let factor = vec_bytes::<f64>(rows.saturating_mul(cols));
+    let reflector_data = vec_bytes::<f64>(rows.saturating_mul(cols));
+    let reflector_headers = vec_bytes::<Vec<f64>>(rows.min(cols));
+    let transformed = vec_bytes::<f64>(rows.max(cols));
+    let solution = vec_bytes::<f64>(cols);
+    factor
+        .saturating_add(reflector_data)
+        .saturating_add(reflector_headers)
+        .saturating_add(transformed)
+        .saturating_add(solution)
 }
 
 /// Full-rank least squares. Tall systems use B=QR; wide systems use Bᵀ=QR

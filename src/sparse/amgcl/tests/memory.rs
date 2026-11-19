@@ -104,6 +104,45 @@ fn matmul_budget_preserves_product() {
 }
 
 #[test]
+fn setup_rejects_spai1_transient_peak() {
+    let n = 600;
+    let mut triplets = Vec::with_capacity(3 * n - 2);
+    for column in 0..n {
+        triplets.push((0, column, if column == 0 { 4.0 } else { -1.0 }));
+    }
+    for row in 1..n {
+        triplets.push((row, 0, -1.0));
+        triplets.push((row, row, 4.0));
+    }
+    let a = CsrMatrix::from_triplets(n, n, triplets).unwrap();
+    let params = |max_memory_mb| {
+        Some(AmgParams {
+            smoother: Smoother::Spai1,
+            max_levels: 1,
+            direct_coarse: false,
+            max_memory_mb,
+            ..AmgParams::default()
+        })
+    };
+
+    let err = amg_setup(a.row_offsets(), a.col_indices(), a.values(), params(1)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::OutOfMemory {
+                budget_mb: 1,
+                level: Some(0),
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+
+    let amg = amg_setup(a.row_offsets(), a.col_indices(), a.values(), params(16)).unwrap();
+    assert!(amg.memory_bytes() <= 16 * BYTES_PER_MIB);
+}
+
+#[test]
 fn amg_setup_and_amg_setup_owned_match_across_strategies_and_retained_bytes() {
     let a = CsrMatrix::poisson_2d(16, 16).unwrap();
     let b: Vec<f64> = (0..a.nrows()).map(|i| 1.0 + (i % 7) as f64 * 0.25).collect();
