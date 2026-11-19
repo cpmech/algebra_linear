@@ -7,6 +7,9 @@ use crate::sparse::amgcl::vector::{axpy_with, check_finite_with, dot_with, norm_
 use crate::sparse::amgcl::{Error, Result};
 
 /// Preconditioned conjugate gradients for symmetric positive-definite systems.
+///
+/// A nonpositive preconditioned residual or search-direction curvature is reported as a solver
+/// breakdown rather than iterated through.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Cg {
     /// Iteration and stopping parameters.

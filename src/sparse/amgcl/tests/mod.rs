@@ -1,3 +1,6 @@
+//! Tests assert mathematical convergence and true residuals, not upstream-specific floating-point
+//! traces: nothing expects bitwise equality with C++ AMGCL, whose operation order differs.
+
 mod aggregation;
 mod api;
 mod coarse_singular;

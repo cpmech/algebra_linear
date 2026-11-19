@@ -1,3 +1,9 @@
+//! Owned CSR storage, checked constructors, serial and parallel SpMV, transpose, and SpGEMM —
+//! AMGCL's `backend/builtin.hpp`, with the row-accumulator product from `detail/spgemm.hpp`.
+//!
+//! Parallel kernels preserve each row's arithmetic order and match their serial counterparts, and
+//! products and transposes emit sorted rows, so their output is deterministic.
+
 use crate::sparse::amgcl::memory::{
     BudgetGuard, MemoryBudget, csr_bytes, try_clone_slice, try_reserve_vec_filled, try_reserve_vec_with_capacity, try_vec_filled,
     try_vec_with_capacity, vec_bytes,

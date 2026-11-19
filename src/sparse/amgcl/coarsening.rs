@@ -1,4 +1,9 @@
-//! Classical and aggregation-based AMG coarsening strategies.
+//! Classical and aggregation-based AMG coarsening.
+//!
+//! Ruge–Stüben follows AMGCL's `coarsening/ruge_stuben.hpp`: strength graph, C/F split, and direct
+//! interpolation. The two transfer variants follow `coarsening/aggregation.hpp` (non-smoothed)
+//! and `coarsening/smoothed_aggregation.hpp` (filtered Jacobi smoothing with fixed or estimated
+//! damping).
 
 mod aggregation;
 

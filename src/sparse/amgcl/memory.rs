@@ -1,4 +1,7 @@
 //! Memory accounting, soft memory budgets, and fallible bulk allocations.
+//!
+//! This layer has no upstream counterpart — AMGCL never checks memory. It exists so a setup or a
+//! solve can refuse a peak above `max_memory_mb` with [`Error::OutOfMemory`] instead of aborting.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 

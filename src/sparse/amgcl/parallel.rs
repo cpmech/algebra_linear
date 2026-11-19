@@ -1,4 +1,13 @@
-//! Deterministic shared-memory execution using only standard-library threads.
+//! Deterministic shared-memory execution using only standard-library threads, replacing AMGCL's
+//! OpenMP row and vector parallelism.
+//!
+//! Workers own disjoint mutable output chunks or return partition-local results; there is no
+//! persistent pool, unsafe lifetime extension, or external runtime. Dot products and norms combine
+//! partition-local results in fixed partition order. Gauss–Seidel, ILU(0) factorization and its
+//! triangular solves, coarse LU, aggregate formation, C/F splitting, and sparse transpose stay
+//! serial. WebAssembly always executes serially, where `Parallelism::auto()` returns one thread.
+//! `Parallelism` is configured independently on `AmgParams` and `SolverParams`, and both default to
+//! one thread.
 
 use crate::sparse::amgcl::{Error, Result};
 

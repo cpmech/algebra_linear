@@ -211,8 +211,8 @@ cargo run --release --example amgcl_parallel -- 4
 
 The module is a scoped core-CPU port, not complete feature-for-feature AMGCL
 parity. MPI, GPU backends, block and complex values, user-supplied near-nullspace
-vectors, and upstream C++ API compatibility are outside its scope. See
-[`AMGCL_PORTING.md`](AMGCL_PORTING.md) for the source map and numerical notes.
+vectors, and upstream C++ API compatibility are outside its scope. The source map from upstream
+headers to local modules lives in the module documentation under `src/sparse/amgcl/`.
 
 ## Performance
 

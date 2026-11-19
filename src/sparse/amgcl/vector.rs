@@ -1,3 +1,6 @@
+//! Vector kernels behind the solvers — dot, stable scaled norm, axpy, and finite checks —
+//! matching AMGCL's backend vector operations.
+
 use crate::sparse::amgcl::parallel::{Parallelism, for_each_mut, map_chunks};
 use crate::sparse::amgcl::{Error, Result};
 

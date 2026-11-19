@@ -1,3 +1,9 @@
+//! The AMG hierarchy, Galerkin products, and cycle control, following AMGCL's `amg.hpp`.
+//!
+//! Restriction is the prolongation transpose, and a coarse operator is computed as `R * A * P`.
+//! [`Amg`] owns its scratch space, so mutability buys allocation-free serial cycles without hidden
+//! shared workspaces.
+
 use std::sync::Arc;
 
 use crate::sparse::amgcl::coarse::DenseLu;

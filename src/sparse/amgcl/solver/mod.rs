@@ -1,3 +1,9 @@
+//! The Krylov solvers and their dispatch, following AMGCL's `solver` headers: `cg.hpp`,
+//! `bicgstab.hpp`, and `gmres.hpp`.
+//!
+//! [`krylov_solve`] takes the method, the [`Amg`] state, the right-hand side, and the solution;
+//! [`KrylovMethod`] selects the solver.
+
 mod bicgstab;
 mod cg;
 mod gmres;

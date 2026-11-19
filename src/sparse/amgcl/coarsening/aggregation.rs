@@ -1,4 +1,10 @@
 //! Greedy aggregation and aggregation-based transfer operators.
+//!
+//! The aggregates come from AMGCL's `plain_aggregates.hpp` (symmetric strength graph, greedy
+//! construction), and the piecewise-constant tentative prolongation from
+//! `tentative_prolongation.hpp`. Non-smoothed transfers divide the coarse Galerkin operator by
+//! `over_interp`; smoothed ones filter weak off-diagonal entries, adjust the filtered diagonal, and
+//! interpolate with damped Jacobi.
 
 use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::memory::{BudgetGuard, MemoryBudget, try_vec_filled, try_vec_with_capacity, vec_bytes};

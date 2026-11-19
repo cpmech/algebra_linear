@@ -1,4 +1,13 @@
-//! Serial relaxation schemes and their per-level setup data.
+//! Relaxation schemes and their per-level setup data, following AMGCL's relaxation headers:
+//! `gauss_seidel.hpp` (serial forward and backward sweeps), `damped_jacobi.hpp` (configurable
+//! damping), `ilu0.hpp` (zero-fill factors over a canonicalized input pattern), `chebyshev.hpp`
+//! (polynomial recurrence over power-based spectral estimates with a deterministic initial vector),
+//! `spai0.hpp` (least-squares diagonal approximate inverse), and `spai1.hpp` with `detail/qr.hpp`
+//! (pattern-matched inverse with a local Householder QR; whole rows go to one worker so each local
+//! QR keeps its order).
+//!
+//! ILU(0) factorization and its triangular solve stay serial, with parallel residual and correction
+//! kernels around them.
 
 use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::memory::{

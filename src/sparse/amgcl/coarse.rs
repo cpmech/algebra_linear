@@ -1,3 +1,10 @@
+//! The dense coarse-level solve, standing in for AMGCL's backend coarse direct solver.
+//!
+//! It reuses the crate's column-major `dgetrf`/`dgetrs` pair — the same kernels `dgesv` uses. The
+//! factorization is computed once during setup and reused in every cycle, so coarse-pivot semantics
+//! follow this crate's LAPACK implementation rather than a second AMG-specific LU. Converting the
+//! coarse CSR operator to column-major dense storage is the only dense conversion in the setup.
+
 use crate::lapack::{LapackError, dgetrf_with_pivots, dgetrs};
 use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::memory::{MemoryBudget, try_vec_filled, vec_bytes};

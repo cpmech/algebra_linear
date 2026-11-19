@@ -7,6 +7,13 @@
 //! dense coarse LU, preconditioned CG/BiCGStab/GMRES, and optional safe
 //! shared-memory execution using standard-library scoped threads.
 //!
+//! This is a core CPU port, not feature-for-feature parity: MPI, distributed memory, GPU
+//! backends, block and complex values, user-provided near-nullspace vectors, and C++ API
+//! compatibility are not included. Configuration uses plain Rust structs rather than Boost
+//! property trees, and [`Error`] keeps invalid matrices, dimensions, parameters, singular pivots,
+//! non-finite arithmetic, and Krylov breakdowns distinguishable. Each module below documents the
+//! upstream AMGCL header it follows.
+//!
 //! AMGCL consumes compressed sparse row (CSR) arrays directly. The module does
 //! not convert between CSR and the CSC format used by the sparse LU solvers;
 //! callers provide the format required by their selected solver.
