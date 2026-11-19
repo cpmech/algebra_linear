@@ -1,6 +1,7 @@
 use crate::sparse::amgcl::coarse::DenseLu;
 use crate::sparse::amgcl::matrix::CsrMatrix;
 use crate::sparse::amgcl::memory::{BYTES_PER_MIB, MemoryBudget, bytes_to_mib_ceil};
+use crate::sparse::amgcl::relaxation::Relaxation;
 use crate::sparse::amgcl::{
     AggregationParams, AmgParams, ChebyshevParams, Coarsening, Error, Ilu0Params, KrylovMethod, Parallelism, SmoothedAggregationParams, Smoother,
     SolverParams, amg_setup, amg_setup_owned, krylov_solve,
@@ -424,6 +425,75 @@ fn setup_enforces_budget_across_smoothers() {
         assert_eq!(amg.memory_bytes(), amg.computed_memory_bytes());
         assert!(amg.memory_bytes() <= 8 * BYTES_PER_MIB);
     }
+}
+
+#[test]
+fn setup_rejects_smoother_peak_beyond_budget_while_retained_state_fits() {
+    let (row_ptr, col_idx, values) = diagonal_raw(18_000);
+    let params = |max_memory_mb| {
+        Some(AmgParams {
+            smoother: Smoother::Ilu0(Ilu0Params::default()),
+            max_levels: 1,
+            direct_coarse: false,
+            max_memory_mb,
+            ..AmgParams::default()
+        })
+    };
+
+    let err = amg_setup(&row_ptr, &col_idx, &values, params(1)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::OutOfMemory {
+                budget_mb: 1,
+                level: Some(0),
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+
+    let amg = amg_setup(&row_ptr, &col_idx, &values, params(2)).unwrap();
+    assert_eq!(amg.memory_bytes(), amg.computed_memory_bytes());
+    assert!(amg.memory_bytes() <= BYTES_PER_MIB);
+}
+
+#[test]
+fn chebyshev_budget_covers_power_iteration_peak() {
+    let (row_ptr, col_idx, values) = diagonal_raw(32_000);
+    let a = CsrMatrix::from_parts(32_000, 32_000, row_ptr, col_idx, values).unwrap();
+    let smoother = Smoother::Chebyshev(ChebyshevParams {
+        degree: 4,
+        higher: 1.0,
+        lower: 1.0 / 30.0,
+        scale: true,
+        power_iterations: 4,
+    });
+
+    // In the hierarchy the smoother's level matrix is already retained when the smoother is
+    // built. Charge it so the 1 MiB call reaches the power-iteration buffers instead of stopping
+    // at the smoother's own 512_000 B footprint.
+    let budget = |budget_mb| {
+        let budget = MemoryBudget::new(budget_mb);
+        budget.record_retained(a.memory_bytes());
+        budget
+    };
+
+    let err = Relaxation::new_with_budget(&a, smoother, Parallelism::default(), &budget(1), Some(0)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::OutOfMemory {
+                budget_mb: 1,
+                level: Some(0),
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+
+    let relaxation = Relaxation::new_with_budget(&a, smoother, Parallelism::default(), &budget(2), Some(0)).unwrap();
+    assert!(relaxation.memory_bytes() <= BYTES_PER_MIB);
 }
 
 #[test]
