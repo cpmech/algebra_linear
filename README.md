@@ -216,22 +216,26 @@ headers to local modules lives in the module documentation under `src/sparse/amg
 
 ## Performance
 
-The direct solver of [`russell_sparse`](https://crates.io/crates/russell_sparse) — `Genie::Direct`
-from 5.0, `Native` in 4.x, which is where these numbers come from — is the sparse LU in this crate.
-The table below compares it with UMFPACK on the benchmark matrices that completed; the data is from
+The `Faer` solver of [`russell_sparse`](https://crates.io/crates/russell_sparse) — `Genie::Faer`
+from 5.5 (`Genie::Direct` in 5.0–5.4, `Native` in 4.x) — is the `sparse::faer` LU in this crate,
+using the simplicial path (`LuMethod::Simplicial`) by default. Note that `SupernodalLu` omits
+contribution blocks between supernodes and instead updates each front directly from the stored
+`L` and `U` columns, so large fronts are slower than simplicial (and slower than upstream `faer`).
+The table below compares the default simplicial path with UMFPACK on the SuiteSparse benchmark
+matrices that completed; the data is from
 [benchmark-russell](https://github.com/cpmech/benchmark-russell).
 
-| Matrix | NROW | NNZ | Direct | UMFPACK | UMFPACK / Direct |
+| Matrix | NROW | NNZ | Faer | UMFPACK | UMFPACK / Faer |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| bwm2000 | 2,000 | 7,996 | 1.11 ms | 0.750 ms | 1.47× faster |
-| mhd1280b (c) | 1,280 | 22,778 | 0.717 ms | 0.383 ms | 1.87× faster |
-| rdb5000 | 5,000 | 29,600 | 39.0 ms | 13.6 ms | 2.88× faster |
-| mplate (c) | 5,962 | 142,190 | 3.13 s | 627 ms | 4.99× faster |
-| Goodwin_040 | 17,922 | 561,677 | 449 ms | 107 ms | 4.19× faster |
-| fp | 7,548 | 848,553 | 904 ms | 154 ms | 5.85× faster |
-| xenon1 | 48,600 | 1,181,120 | 55.2 s | 598 ms | 92× faster |
+| bwm2000 | 2,000 | 7,996 | 1.08 ms | 0.750 ms | 1.44× faster |
+| mhd1280b (c) | 1,280 | 22,778 | 0.740 ms | 0.383 ms | 1.93× faster |
+| rdb5000 | 5,000 | 29,600 | 35.2 ms | 13.6 ms | 2.59× faster |
+| mplate (c) | 5,962 | 142,190 | 3.12 s | 627 ms | 4.97× faster |
+| Goodwin_040 | 17,922 | 561,677 | 508 ms | 107 ms | 4.75× faster |
+| fp | 7,548 | 848,553 | 942 ms | 154 ms | 6.10× faster |
+| xenon1 | 48,600 | 1,181,120 | 55.0 s | 598 ms | 92× faster |
 
-`(c)` marks a complex-valued matrix; rows are sorted by NNZ. **NNZ is the matrix-file non-zero count.** Times are five-run averages from the benchmark on the benchmark machine (Arch Linux, Intel Core i9-13900KF).
+`(c)` marks a complex-valued matrix; rows are sorted by NNZ. **NNZ is the matrix-file non-zero count.** Times are outlier-free averages on the benchmark machine (Arch Linux, Intel Core i9-13900KF): 5 runs for UMFPACK, and for Faer 3 runs on the fast/medium matrices (`<= 30 s`) and 1 run on `xenon1`.
 
 The kernel underneath matters most where the matrices are small, because the work per call stops
 being the arithmetic. Two products carry an element-level computation, and both were measured on
@@ -252,13 +256,13 @@ seventy-two multiplications — and two of those per Gauss point made a `gemlab`
 138 µs. At 60 ns the same integral is 1.05 µs. Large products keep their throughput (the panels are
 now sized by the block actually used); the small end is where the change is.
 
-That direct solver is fast on small systems: up to about 30,000 non-zeros it takes at most a few tens of milliseconds. It becomes very slow for matrices with more than **1 million** non-zeros: the `xenon1` case (NROW=48,600, 1,181,120 non-zeros) takes **55 s**, and the next real case (`twotone`, NROW=120,750, 1,224,224 non-zeros) did not finish within the 3-minute probe. For matrices with more than **1 million** non-zeros, expect **nearly a minute** or more.
+The Faer solver is fast on small systems: up to about 30,000 non-zeros it takes at most a few tens of milliseconds. It becomes very slow for matrices with more than **1 million** non-zeros: the `xenon1` case (NROW=48,600, 1,181,120 non-zeros) takes **55.0 s**, and matrices above 1.2 million pattern entries (starting with `twotone`, NROW=120,750, 1,224,224 non-zeros) are skipped by default in the benchmark harness. For matrices with more than **1 million** non-zeros, expect **nearly a minute** or more.
 
-The threshold is not a function of NNZ alone. The complex `mplate` (NROW=5,962, 142,190 non-zeros) takes **3.13 s**, and `RFdevice` (NROW=74,104, 365,580 non-zeros) did not finish in **15 minutes**; sparsity structure and numerical type matter as much as the non-zero count.
+The threshold is not a function of NNZ alone. The complex `mplate` (NROW=5,962, 142,190 non-zeros) takes **3.12 s**, and `RFdevice` (NROW=74,104, 365,580 non-zeros) did not finish within the **3-minute** probe; sparsity structure and numerical type matter as much as the non-zero count.
 
-UMFPACK is faster than the direct solver on every matrix in the table; the gap grows with the fill-in, reaching **92×** on `xenon1`. The figure below shows the same ratios on a log scale (the dashed line is 1×):
+UMFPACK is faster than the Faer solver on every matrix in the table; the gap grows with the fill-in, reaching **92×** on `xenon1`. The figure below shows the same ratios on a log scale (the dashed line is 1×):
 
-![UMFPACK speed-up over the direct solver](docs/plot_speedup_umfpack.png)
+![UMFPACK speed-up over the Faer solver](docs/plot_speedup_umfpack.png)
 
 ### Iterative solvers
 
@@ -273,20 +277,20 @@ iteration converge.
 Where they do converge they earn their place, because the failure mode they cover is the one the
 direct backends cannot:
 
-| matrix | UMFPACK | MUMPS | BiCGStab | GMRES | Direct |
+| matrix | UMFPACK | MUMPS | BiCGStab | GMRES | Faer |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| atmosmodd | out of memory | 46.2 s | **7.78 s** (139 it) | 14.5 s (326 it) | — |
-| atmosmodl | out of memory | 40.9 s | **5.70 s** (84 it) | 7.78 s (147 it) | — |
-| rajat31 | out of memory | 16.0 s | 38.1 s (41 it) | — | — |
-| xenon1 | 595 ms | — | 2.73 s (228 it) | 3.00 s (460 it) | 55.2 s |
+| atmosmodd | out of memory | 46.0 s | **7.78 s** (139 it) | 14.5 s (326 it) | — |
+| atmosmodl | out of memory | 40.9 s | **5.75 s** (84 it) | 7.78 s (147 it) | — |
+| rajat31 | out of memory | 16.0 s | 38.0 s (41 it) | out of memory | — |
+| xenon1 | 598 ms | 365 ms | 2.73 s (228 it) | 2.94 s (460 it) | 55.0 s |
 | memchip | 26.3 s | 8.05 s | 21.3 s (77 it) | 8.06 s (37 it) | — |
-| `pmsim-hex8-27` (157 dofs) | 1.88 ms | 7.66 ms | 0.85 ms (15 it) | **0.76 ms** (21 it) | 934 µs |
+| `pmsim-hex8-27` (157 dofs) | 736 µs | 7.66 ms | 818 µs (15 it) | **736 µs** (21 it) | 863 µs |
 
 Three readings: on the matrices whose factorization does not fit in memory, the iterative path is the
-only pure-Rust option and it finishes in seconds; on `xenon1` it is twenty times the direct solver and
-five times slower than UMFPACK, which is the one to use when it can factor the matrix; and on the
-157-dof system a finite-element code factors every step, the Krylov iteration is as fast as the direct
-solve and there is nothing to gain.
+only pure-Rust option and it finishes in seconds; on `xenon1` it is twenty times faster than the Faer
+solver and five times slower than UMFPACK, which is the one to use when it can factor the matrix; and
+on the 157-dof system a finite-element code factors every step, the Krylov iteration is as fast as the
+Faer solve and there is nothing to gain.
 
 Two properties make the hierarchy usable on real matrices, both measured here: a row with no diagonal
 entry — legitimate in a structural matrix — gets a unit diagonal in the hierarchy's own operators

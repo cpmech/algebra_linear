@@ -12,10 +12,11 @@
 //!
 //! The counts are those of the Cholesky factor of `AᵀA`, so `ratio` grows with
 //! the average column density. A supernode is profitable once its columns are
-//! dense, and `LuMethod::auto()` uses `40.0` while `russell_sparse` passes `1.0`
-//! for the same choice: the two measure different problem classes, so the number
-//! is a caller-side decision rather than a constant of the kernel. It is a
-//! heuristic; `bench_sparse_lu` is the evidence.
+//! dense and its front size stays small; `LuMethod::auto()` uses `40.0`, while
+//! both `LuMethod::default()` and `russell_sparse` (from 5.5.0) default to
+//! `Simplicial` so large SuiteSparse fronts do not pay for the contribution-block-free
+//! supernodal update. The threshold is a caller-side decision rather than a
+//! constant of the kernel; `bench_sparse_lu` is the evidence.
 //!
 //! Neither method is the recommended one in general. Measured on a 192-dof
 //! lattice with three dofs per node (fill 2.96): the supernodal path factorizes
