@@ -1,4 +1,4 @@
-# algebra_linear - Pure-Rust BLAS, LAPACK, sparse LU, and AMG
+# algebra_linear - Pure-Rust BLAS, LAPACK, and sparse LU
 
 <p align="left">
   <img src="docs/web-assembly-logo.png" width="96" alt="WebAssembly logo"><br>
@@ -15,18 +15,11 @@ target, including `wasm32-unknown-unknown`.
 | `blas` | level 1–3: `dgemm` (+`tn`/`nt`/`tt`), `dgemv` (+trans), `ddot`, `dnrm2`, `dasum`, `idamax`, `daxpy`, `dlange`, `dger`, `dsyrk`, `dtrsv` (+transpose), `dtrsm`, and the complex twins `zgemm` (+transposes), `zgemv` (+trans), `zger`, `zherk`, `zsyrk`, `zaxpy`, `zscal`, `ztrsv` (+transpose), `ztrsm`, `dznrm2` |
 | `lapack` | drivers: `dgesv`, `dgetrf`, `dgetrf_rect` (the `nrows x ncols` panel), `dgetri`, `dpotrf`, `dsyev`, `dgesvd`, `dgeev` (+left vectors), `dggev`, and the complex `zgesv`, `zgetrf`, `zgetrf_rect`, `zgetri`, `zpotrf`, `zheev`, `zgeev`, `zgesvd`, `zggev`, plus the auxiliary routines; the `TESTING/LIN` accuracy checkers and the `TESTING/MATGEN` families are test-only and are not compiled into the crate |
 | `sparse::faer` | `SparseLu`, an opaque sparse LU over caller-owned CSC arrays, with `LuMethod` choosing the simplicial or supernodal factorization, `EffectiveLuMethod` and `flop_ratio` reporting what `analyze` selected, one analysis reused across value updates, `SparseLuStats` reporting structure, method, proxy, cost and timing, real (`f64`) and complex (`Complex64`) scalars, and the COLAMD ordering |
-| `sparse::qdldl` | `Qdldl`, an unpivoted `L D L^T` solver for symmetric positive-definite and quasi-definite (SQD) upper-triangular CSC matrices with zero-allocation numeric refactorization, inertia reporting, and in-place triangular/full solves |
-| `sparse::basiclu` | `BasicLu`, a general unsymmetric real (`f64`) CSC sparse LU with triangular singleton peeling, Markowitz threshold pivoting, dense and hyper-sparse Gilbert–Peierls FTRAN/BTRAN solves, and Forrest–Tomlin rank-1 basis column updates |
-| `sparse::amgcl` | array-based entry points `amg_setup` / `amg_setup_owned` and `krylov_solve(method, &mut amg, rhs, x, params)` for real `f64` CSR arrays, classical Ruge–Stüben and aggregation-based AMG, Gauss–Seidel, damped Jacobi, ILU(0), Chebyshev, SPAI(0/1), AMG-preconditioned CG, BiCGStab, restarted GMRES, optional MiB memory budgeting (`max_memory_mb` / `Error::OutOfMemory`), and optional native scoped-thread parallelism |
 
 - `sparse::faer` (the sparse LU and its COLAMD ordering) is ported from [faer](https://codeberg.org/sarah-quinones/faer) (MIT License)
-- `sparse::qdldl` is ported from [qdldl](https://github.com/osqp/qdldl) `v0.1.9` (Apache-2.0 License)
-- `sparse::basiclu` is ported from [HiGHS](https://github.com/ERGO-Code/HiGHS) (`highs/ipm/basiclu/`, MIT License)
-- `sparse::amgcl` is ported from [AMGCL](https://github.com/ddemidov/amgcl) (MIT License)
 
 Not every BLAS or LAPACK routine is here: the port covers the drivers a dense
-linear-algebra caller needs, sparse LU with a COLAMD ordering, and the core CPU
-AMGCL algorithms. Each function names the reference source it follows (for example
+linear-algebra caller needs and sparse LU with a COLAMD ordering. Each function names the reference source it follows (for example
 "transcription of `dsytrd`/`dlatrd`") so it can be checked against LAPACK 3.12.1.
 
 ## Conventions
@@ -36,11 +29,11 @@ AMGCL algorithms. Each function names the reference source it follows (for examp
   from.
 - **No workspace arguments.** The workspace a Fortran routine asks the caller for is
   allocated internally here.
-- **Solver-specific sparse formats.** Sparse LU callers provide CSC; AMGCL callers
-  provide CSR. The crate does not convert between CSC and CSR.
+- **Sparse format.** Sparse LU callers provide CSC. The crate does not convert between
+  CSC and CSR.
 - **Dense drivers** return `Result<(), LapackError>` rather than LAPACK's `INFO`, with
   `INFO < 0` mapped to `BadShape` and `INFO > 0` to `Singular` or `Convergence`. The sparse
-  routines return `faer::Error`; the iterative ones return `amgcl::Error`.
+  routines return `faer::Error`.
 - An AVX2+FMA micro-kernel is selected at run time on x86-64; every other target
   (including `wasm32`) takes the portable blocked kernel.
 
@@ -89,130 +82,6 @@ fn main() -> Result<(), algebra_linear::sparse::faer::Error> {
     Ok(())
 }
 ```
-
-## Sparse LDL^T (`sparse::qdldl`)
-
-`Qdldl` factorizes symmetric positive-definite and symmetric quasi-definite (SQD)
-matrices given as upper-triangular CSC arrays (`row <= col`), supporting zero-allocation
-numeric refactorization on the analyzed sparsity pattern:
-
-```rust
-use algebra_linear::sparse::qdldl::Qdldl;
-
-fn main() -> Result<(), algebra_linear::sparse::qdldl::Error> {
-    // Upper triangle of A = [[4, 1], [1, 3]] in CSC form.
-    let col_ptr = [0, 1, 3];
-    let row_idx = [0, 0, 1];
-    let values = [4.0, 1.0, 3.0];
-
-    let mut qdldl = Qdldl::analyze(&col_ptr, &row_idx)?;
-    qdldl.factorize(&col_ptr, &row_idx, &values)?;
-
-    let mut b = [1.0, 2.0];
-    qdldl.solve(&mut b)?;
-    assert!((b[0] - 1.0 / 11.0).abs() < 1e-14);
-    assert!((b[1] - 7.0 / 11.0).abs() < 1e-14);
-    assert_eq!(qdldl.stats().unwrap().positive_inertia, 2);
-    Ok(())
-}
-```
-
-## Sparse Basis LU & Rank-1 Updates (`sparse::basiclu`)
-
-`BasicLu` targets unsymmetric sparse systems and linear-programming basis updates,
-combining singleton peeling, threshold Markowitz pivoting, hyper-sparse solves, and
-Forrest–Tomlin column replacements:
-
-```rust
-use algebra_linear::sparse::basiclu::{BasicLu, BasicLuParams};
-
-fn main() -> Result<(), algebra_linear::sparse::basiclu::Error> {
-    let col_ptr = [0, 2, 4];
-    let row_idx = [0, 1, 0, 1];
-    let values = [4.0, 1.0, 1.0, 3.0];
-
-    let mut lu = BasicLu::new(BasicLuParams::default());
-    lu.factorize(&col_ptr, &row_idx, &values)?;
-
-    let mut b = [1.0, 2.0];
-    lu.solve(&mut b)?;
-    assert!((b[0] - 1.0 / 11.0).abs() < 1e-14);
-    assert!((b[1] - 7.0 / 11.0).abs() < 1e-14);
-
-    // Replace column 0 with [2.0, 0.0]^T -> A_new = [[2, 1], [0, 3]].
-    lu.update(0, &[0], &[2.0])?;
-    let mut x = [3.0, 3.0];
-    lu.solve(&mut x)?;
-    assert!((x[0] - 1.0).abs() < 1e-14);
-    assert!((x[1] - 1.0).abs() < 1e-14);
-    Ok(())
-}
-```
-
-## AMG and Krylov solvers
-
-The `sparse::amgcl` module accepts raw compressed sparse row (CSR) arrays through
-`amg_setup` (borrowed slices) or `amg_setup_owned` (caller-owned `Vec`s, avoiding
-an input clone). `AmgParams::max_memory_mb` and `SolverParams::max_memory_mb` set
-optional MiB working-memory budgets (`0` disables the limit), tracked incrementally
-across setup and Krylov solves (`Cg`, `BiCgStab`, and single-basis restarted `Gmres`)
-with `try_reserve_exact` backstops returning `amgcl::Error::OutOfMemory`. `Amg::memory_bytes`
-reports the retained hierarchy footprint in bytes.
-
-This example builds the one-dimensional Laplacian `tridiag(-1, 4, -1)` on three
-unknowns and solves it with CG. At that size the hierarchy is a single level that
-the coarse solve handles, so the multigrid path appears in the examples below
-rather than here:
-
-```rust
-use algebra_linear::sparse::amgcl::{AmgParams, KrylovMethod, SolverParams, amg_setup_owned, krylov_solve};
-
-fn main() -> Result<(), algebra_linear::sparse::amgcl::Error> {
-    let row_ptr = vec![0, 2, 5, 7];
-    let col_idx = vec![0, 1, 0, 1, 2, 1, 2];
-    let values = vec![4.0, -1.0, -1.0, 4.0, -1.0, -1.0, 4.0];
-
-    let mut amg = amg_setup_owned(row_ptr, col_idx, values, Some(AmgParams::default()))?;
-    assert!(amg.memory_bytes() > 0);
-    let b = [1.0, 2.0, 3.0];
-    let mut x = [0.0; 3];
-    let report = krylov_solve(
-        KrylovMethod::Cg,
-        &mut amg,
-        &b,
-        &mut x,
-        SolverParams {
-            tolerance: 1e-10,
-            max_iterations: 100,
-            ..SolverParams::default()
-        },
-    )?;
-    assert!(report.converged);
-    println!("{} iterations, x = {x:?}", report.iterations);
-    Ok(())
-}
-```
-
-Execution is serial by default. On native targets, set `Parallelism` independently
-in `AmgParams` and `SolverParams` to enable standard-library scoped threads. There
-is no persistent worker pool or external runtime. WebAssembly always uses the
-serial path. Gauss–Seidel, ILU(0) factorization and triangular solves, dense
-coarse LU, and sequential coarsening steps remain serial.
-
-Run the examples with:
-
-```bash
-cargo run --release --example amgcl_poisson -- 32
-cargo run --release --example amgcl_aggregation
-cargo run --release --example amgcl_smoothers
-cargo run --release --example amgcl_nonsymmetric
-cargo run --release --example amgcl_parallel -- 4
-```
-
-The module is a scoped core-CPU port, not complete feature-for-feature AMGCL
-parity. MPI, GPU backends, block and complex values, user-supplied near-nullspace
-vectors, and upstream C++ API compatibility are outside its scope. The source map from upstream
-headers to local modules lives in the module documentation under `src/sparse/amgcl/`.
 
 ## Performance
 
@@ -264,41 +133,6 @@ UMFPACK is faster than the Faer solver on every matrix in the table; the gap gro
 
 ![UMFPACK speed-up over the Faer solver](docs/plot_speedup_umfpack.png)
 
-### Iterative solvers
-
-`sparse::amgcl` carries algebraic multigrid and the three Krylov methods `russell_sparse` exposes as
-`Genie::Iterative`. Their convergence is matrix-dependent, and the measured state is worth stating
-before the timings: on the 33 real SuiteSparse matrices of
-[benchmark-russell](https://github.com/cpmech/benchmark-russell), with the default AMG settings and a
-1e-6 relative-error gate, **BiCGStab solves 12, GMRES 7 and CG 1** (CG needs a symmetric positive
-definite matrix). What limits them is not the kernels but how often the preconditioner makes the
-iteration converge.
-
-Where they do converge they earn their place, because the failure mode they cover is the one the
-direct backends cannot:
-
-| matrix | UMFPACK | MUMPS | BiCGStab | GMRES | Faer |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| atmosmodd | out of memory | 46.0 s | **7.78 s** (139 it) | 14.5 s (326 it) | — |
-| atmosmodl | out of memory | 40.9 s | **5.75 s** (84 it) | 7.78 s (147 it) | — |
-| rajat31 | out of memory | 16.0 s | 38.0 s (41 it) | out of memory | — |
-| xenon1 | 598 ms | 365 ms | 2.73 s (228 it) | 2.94 s (460 it) | 55.0 s |
-| memchip | 26.3 s | 8.05 s | 21.3 s (77 it) | 8.06 s (37 it) | — |
-| `pmsim-hex8-27` (157 dofs) | 736 µs | 7.66 ms | 818 µs (15 it) | **736 µs** (21 it) | 863 µs |
-
-Three readings: on the matrices whose factorization does not fit in memory, the iterative path is the
-only pure-Rust option and it finishes in seconds; on `xenon1` it is twenty times faster than the Faer
-solver and five times slower than UMFPACK, which is the one to use when it can factor the matrix; and
-on the 157-dof system a finite-element code factors every step, the Krylov iteration is as fast as the
-Faer solve and there is nothing to gain.
-
-Two properties make the hierarchy usable on real matrices, both measured here: a row with no diagonal
-entry — legitimate in a structural matrix — gets a unit diagonal in the hierarchy's own operators
-rather than failing the setup, and a coarsest operator that comes out semi-definite is factorized
-with a small relative diagonal shift (1e-12 … 1e-6 of the operator's largest entry). The system the
-Krylov method solves and measures is always the caller's matrix; only the preconditioner sees the
-adjusted copies.
-
 ## Tests
 
 ```bash
@@ -323,4 +157,4 @@ put a developer's directory layout into released source.
 
 ## License
 
-`BSD-3-Clause AND Apache-2.0`. The dense kernels are based on LAPACK 3.12.1 and BLAS (BSD 3-Clause). The sparse LU and its COLAMD ordering are based on [faer](https://codeberg.org/sarah-quinones/faer) (MIT) and SuiteSparse COLAMD (BSD 3-Clause). The `sparse::amgcl` module follows [AMGCL](https://github.com/ddemidov/amgcl) (MIT), `sparse::basiclu` follows [HiGHS](https://github.com/ERGO-Code/HiGHS) (`highs/ipm/basiclu/`, MIT), and `sparse::qdldl` is ported from [qdldl](https://github.com/osqp/qdldl) `v0.1.9` (Apache-2.0). Their notices are in the [`LICENSE`](LICENSE) file. The Rust code is by Dorival Pedroso. If you share a binary that statically links this crate, you must include the [`LICENSE`](LICENSE) file.
+`BSD-3-Clause`. The dense kernels are based on LAPACK 3.12.1 and BLAS (BSD 3-Clause). The sparse LU and its COLAMD ordering are based on [faer](https://codeberg.org/sarah-quinones/faer) (MIT) and SuiteSparse COLAMD (BSD 3-Clause). The notices are in the [`LICENSE`](LICENSE) file. The Rust code is by Dorival Pedroso. If you share a binary that statically links this crate, you must include the [`LICENSE`](LICENSE) file.

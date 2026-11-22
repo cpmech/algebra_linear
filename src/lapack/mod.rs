@@ -325,8 +325,8 @@ pub fn dgesv(a: &mut [f64], b: &mut [f64]) -> Result<(), LapackError> {
 /// `dgetrs`: solve using an LU factorization returned by [`dgetrf`].
 ///
 /// This crate-internal entry point shares the solve phase between `dgesv` and
-/// clients, such as AMG's coarse solver, that reuse one factorization. Callers
-/// must provide matching square shapes and a factorization from `dgetrf`.
+/// clients that reuse one factorization. Callers must provide matching square
+/// shapes and a factorization from `dgetrf`.
 pub(crate) fn dgetrs(lu: &[f64], ipiv: &[usize], b: &mut [f64]) {
     let n = b.len();
     debug_assert_eq!(lu.len(), n * n);

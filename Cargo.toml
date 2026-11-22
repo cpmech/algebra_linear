@@ -1,15 +1,15 @@
 [package]
 name = "algebra_linear"
-version = "3.1.0"
+version = "4.0.0"
 edition = "2024"
-license = "BSD-3-Clause AND Apache-2.0"
-description = "Pure-Rust BLAS, LAPACK, sparse LU/LDL^T, AMG, and Krylov solvers"
+license = "BSD-3-Clause"
+description = "Pure-Rust BLAS, LAPACK, and sparse LU solvers"
 homepage = "https://github.com/cpmech/algebra_linear"
 repository = "https://github.com/cpmech/algebra_linear"
 documentation = "https://docs.rs/algebra_linear"
 readme = "README.md"
 categories = ["mathematics", "science"]
-keywords = ["blas", "lapack", "linear-algebra", "matrix", "amg"]
+keywords = ["blas", "lapack", "linear-algebra", "matrix", "sparse-lu"]
 # Process files stay out of the published crate: code, README, LICENSE and the
 # reference harness are what a user needs.
 exclude = ["AGENTS.md", ".github/", ".gitignore", ".vscode/", "rustfmt.toml", "zscripts/"]

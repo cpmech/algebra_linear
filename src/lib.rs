@@ -1,10 +1,10 @@
 #![warn(missing_docs)]
-//! Pure-Rust BLAS, LAPACK, sparse direct solvers (`sparse::faer`, `sparse::qdldl`, `sparse::basiclu`), and AMG/Krylov solvers (`sparse::amgcl`).
+//! Pure-Rust BLAS, LAPACK, and sparse LU direct solver (`sparse::faer`).
 //!
 //! # Layout
 //!
 //! An upstream port is a folder named after its upstream (`lapack/`,
-//! `sparse/{amgcl,basiclu,faer,qdldl}/`) or a single file when all kernels share
+//! `sparse/faer/`) or a single file when all kernels share
 //! one preamble (`blas.rs`), and each holds the translated kernels plus the Rust
 //! handles, error and statistics types and the tests that expose them. Level
 //! roots (`lib.rs`, `sparse/mod.rs`) hold module declarations, crate-level
@@ -30,11 +30,9 @@
 //! tests in each module.
 //!
 //! The dense routines here are derived from LAPACK and reference BLAS, which
-//! are BSD-3-Clause; `sparse::qdldl` is derived from `osqp/qdldl` `v0.1.9`
-//! (Apache-2.0); `sparse::faer`, `sparse::amgcl`, and `sparse::basiclu` follow
-//! MIT-licensed upstream projects (`faer`, `AMGCL`, and `HiGHS`/`BasicLU`).
-//! The crate is distributed under `BSD-3-Clause AND Apache-2.0`; see
-//! `LICENSE` for all copyright notices and license texts.
+//! are BSD-3-Clause; `sparse::faer` follows the MIT-licensed faer project.
+//! The crate is distributed under `BSD-3-Clause`; see `LICENSE` for all
+//! copyright notices and license texts.
 
 pub mod blas;
 pub mod lapack;

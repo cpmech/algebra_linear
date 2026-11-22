@@ -4,14 +4,14 @@ Notes for automated agents and contributors working in this repository.
 
 ## What this crate is
 
-A pure-Rust implementation of BLAS, LAPACK, sparse direct solvers, and core CPU
-AMG/Krylov solvers. It must build for any target, including
+A pure-Rust implementation of BLAS, LAPACK, and sparse direct solvers. It must
+build for any target, including
 `wasm32-unknown-unknown`, and the default build compiles no C and links no
 library. External libraries appear only in the development-only reference
 harness described below.
 
 The file layout follows one rule: a port of an upstream library is a folder named
-after it (`lapack/`, `sparse/{amgcl,basiclu,faer,qdldl}/`) — or a single file
+after it (`lapack/`, `sparse/faer/`) — or a single file
 when all its kernels share one preamble (`blas.rs`) — and holds the translated
 kernels plus the Rust handles, error and statistics types and the tests that
 expose them; the level roots (`lib.rs`, `sparse/mod.rs`) hold only module
@@ -21,9 +21,7 @@ declarations, re-exports and documentation; the C reference harness
 ## Hard constraints
 
 - **Dense matrices are column-major**, indexing `data[i + j * nrow]`. Sparse
-  formats are solver-specific: `sparse::faer::SparseLu`, `sparse::basiclu`, and `sparse::qdldl`
-  (upper triangle) accept CSC, while AMGCL accepts CSR. Do not add implicit
-  CSC/CSR conversion; callers provide the required format.
+  LU callers provide CSC; the crate does not convert between CSC and CSR.
 - **Never use `LAPACKE_*`** — it is the row-major API and silently transposes every
   matrix. `lapack.h` binds directly to the Fortran routines and is correctly
   column-major. This applies to the reference harness too.
@@ -228,8 +226,7 @@ otherwise the next person spends a day rediscovering why a file sits below the b
 | `src/sparse/faer/colamd.rs` | the garbage-collection and super-column repair arms are reached only by fill patterns larger than the fixtures; `Error::IndexOverflow` is unreachable at test sizes |
 | `src/sparse/faer/supernodal_lu.rs` | the L/U diagonal-structure guards are drop-invariant checks: a correct supernode partition cannot reach them |
 | `src/sparse/faer/{solver,csc,lu}.rs` | accessor bodies that no test calls; they are not refusal arms |
-| `src/sparse/basiclu/{degree_list,eliminate,markowitz,singletons,solve,update}.rs` | `u32::MAX` generation-counter wraparound resets, defensive `NONE` / empty-seed early-return guards, non-finite spike overflow cleanup, and exact-zero row-eta weight guards (`src/sparse/qdldl/` has 100% line coverage) |
-| `src/sparse/amgcl/{matrix,relaxation,coarse,solver/gmres}.rs` | `try_reserve_vec_*` `Err` arms inside `map_chunks` worker closures (reachable only on physical allocator exhaustion after the parent thread's budget check passed), `spai1_with_budget`'s `rows.checked_mul(cols)` guard, and `checked_mul` `usize`-overflow rescues in `DenseLu::new_with_budget` and `Gmres::solve_with_budget` when `budget_mb == 0` (`memory.rs` and `error.rs` are 100% covered) |
+
 
 So the remainder is rescue and refusal code, by design: a correct routine cannot
 reach the arms whose job is to reject bad input or survive an iteration that gave
@@ -290,10 +287,8 @@ These are the rules the code depends on. Each one has been violated at least onc
 
 ## License
 
-`BSD-3-Clause AND Apache-2.0`. The dense kernels derive from LAPACK 3.12.1
-(BSD 3-Clause), `sparse::qdldl` derives from `osqp/qdldl` `v0.1.9` (Apache-2.0),
-and `sparse::faer`, `sparse::amgcl`, and `sparse::basiclu` follow MIT-licensed
-upstream projects (`faer`, `AMGCL`, and `HiGHS`/`BasicLU`). `LICENSE` reproduces
+`BSD-3-Clause`. The dense kernels derive from LAPACK 3.12.1 (BSD 3-Clause), and
+`sparse::faer` follows the MIT-licensed faer project. `LICENSE` reproduces
 every upstream copyright notice and license text verbatim, and they must stay
 verbatim. A kernel taken from another project (OpenBLAS, say) brings its own
 notice into the same file — and, for anything descending from GotoBLAS, the
